@@ -131,6 +131,41 @@ static void lora_screen_update(void) {
   }
 }
 
+// Plot height (HEIGHT): action bar visible on the profile screen = 280, else stock 304
+uint16_t lora_plot_height = LORA_HEIGHT_FULL;
+static bool lora_bar_hidden = false;              // RAM only: the bar is back after power on
+
+bool lora_bar_visible(void) {return lora_screen_on && !lora_bar_hidden;}
+
+// Called at the start of draw_all(): apply a plot height change, redraw all in the same pass
+static void lora_height_update(void) {
+  lora_screen_update();
+  uint16_t h = lora_bar_visible() ? LORA_HEIGHT_BAR : LORA_HEIGHT_FULL;
+  if (h == lora_plot_height) return;
+  lora_plot_height = h;
+  area_height = AREA_HEIGHT_NORMAL;
+  lora_screen_update();                           // band columns / guides with the new height
+  redraw_request|= REDRAW_PLOT | REDRAW_AREA | REDRAW_FREQUENCY | REDRAW_CAL_STATUS | REDRAW_BATTERY;
+}
+
+void lora_bar_hide(bool hide) {
+  lora_bar_hidden = hide;
+  request_to_redraw(REDRAW_AREA | REDRAW_FREQUENCY);
+}
+
+void lora_bar_toggle(void) {
+  lora_bar_hide(!lora_bar_hidden);
+  lora_toast(lora_bar_hidden ? "Bar hidden: double-tap to show" : "Bar shown: double-tap to hide");
+}
+
+// Bottom left tab (in the left margin of the frequency line) when the bar is hidden
+static void lora_draw_bar_tab(void) {
+  if (!lora_screen_on || !lora_bar_hidden) return;
+  int y = HEIGHT + OFFSETY + 4, c = OFFSETX / 2;
+  lcd_set_foreground(LCD_TRACE_1_COLOR);
+  for (int i = 0; i < 6; i++) lcd_line(c - i, y + i, c + i, y + i);   // small up triangle
+}
+
 // Cell helpers
 static void lora_cell_fill(int x, int y, int w, int h, pixel_t c) {
   if (x < 0) {w+= x; x = 0;}
@@ -984,6 +1019,7 @@ static void lora_cmp_draw(void) {
 
 // draw_all() hook: full screen modes draw instead of the plot; also toast expiry
 bool lora_fullscreen_draw(void) {
+  if (!lora_tune_s.on && lora_cmp.state == LORA_CMP_OFF) lora_height_update();
   if (lora_toast_s.on && chVTTimeElapsedSinceX(lora_toast_s.start) > MS2ST(1000)) {
     lora_toast_s.on = false;
     lora_toast_invalidate();

@@ -66,7 +66,11 @@ static int16_t last_touch_y;
 uint8_t operation_requested = OP_NONE;
 
 //==============================================
+#ifdef __VNA_LORA_PROFILES__
+static uint16_t menu_button_height = (LORA_HEIGHT_FULL + 1) / MENU_BUTTON_MIN;  // HEIGHT is a variable, set on menu draw
+#else
 static uint16_t menu_button_height = MENU_BUTTON_HEIGHT(MENU_BUTTON_MIN);
+#endif
 
 enum {
   UI_NORMAL, UI_MENU, UI_KEYPAD,
@@ -3733,6 +3737,9 @@ static void ui_normal_touch(int touch_x, int touch_y) {
   if (touch_apply_ref_scale(touch_x, touch_y)) return;   // Try apply ref / scale
   // default: switch menu mode after release
   touch_wait_release();
+#ifdef __VNA_LORA_PROFILES__
+  if (lora_double_tap()) return;                         // Profile screen: double-tap = hide/show action bar
+#endif
   ui_mode_menu();
 }
 //================================== end normal plot input ============================================

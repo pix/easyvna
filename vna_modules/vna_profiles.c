@@ -562,7 +562,26 @@ void lora_draw_bar(void) {
   lora_scr_bar_button(5, "S21", "compare", norm, LCD_MENU_TEXT_COLOR);
 }
 
+// Profile screen double-tap (called after a single tap on an empty plot area was released):
+// a second tap within 300 ms toggles the action bar, else false = single tap (menu)
+static bool lora_double_tap(void) {
+  if (!lora_screen_active()) return false;
+  for (int t = 0; t < 30; t++) {
+    if (touch_check() == EVT_TOUCH_PRESSED) {
+      touch_wait_release();
+      lora_bar_toggle();
+      return true;
+    }
+    chThdSleepMilliseconds(10);
+  }
+  return false;
+}
+
 static bool lora_touch_bar(int tx, int ty) {
+  if (!lora_bar_visible()) {                       // hidden: the bottom left tab shows it again
+    if (ty > HEIGHT + OFFSETY && tx < LORA_TAB_W) {touch_wait_release(); lora_bar_toggle(); return true;}
+    return false;
+  }
   if (ty < LORA_BAR_Y) return false;
   int b = tx / LORA_BAR_W;
   systime_t t0 = chVTGetSystemTimeX();

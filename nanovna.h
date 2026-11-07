@@ -576,8 +576,12 @@ void tlv320aic3204_write_reg(uint8_t page, uint8_t reg, uint8_t data);
 #define WIDTH                       455
 // Plot area HEIGHT = NGRIDY * GRIDY
 #ifdef __VNA_LORA_PROFILES__
-// LoRa profiles: plot 24 px lower, the bottom 39 px hold the profile action bar (6 big buttons)
-#define HEIGHT                      280
+// LoRa profiles: plot height set at run time, 280 px on the profile screen with the action bar
+// (the bottom 39 px hold 6 big buttons), stock 304 px otherwise or with the bar hidden
+#define LORA_HEIGHT_FULL            304
+#define LORA_HEIGHT_BAR             280
+extern uint16_t lora_plot_height;
+#define HEIGHT                      lora_plot_height
 #else
 #define HEIGHT                      304
 #endif
@@ -1485,6 +1489,10 @@ int   lora_cmp_touch(int x, int y);            // 0 exit, 1 store A, 2 new A, -1
 void  lora_info_print(uint8_t mask);           // shell: profile info / ref / tune lines
 // vna_profiles.c (ui.c): profile action bar (replaces the frequency line on the profile screen)
 void  lora_draw_bar(void);
+void  lora_bar_toggle(void);                   // hide / show the action bar (RAM only), with toast
+void  lora_bar_hide(bool hide);
+#define LORA_TAB_W 40                          // touch width of the "show bar" tab (bottom left)
+bool  lora_bar_visible(void);
 // main.c: run shell commands queued for the sweep thread (modal screens keep 'capture' working)
 void  shell_poll_pending(void);
 // New buffers live in CCM RAM (CPU only, no DMA), zeroed at startup

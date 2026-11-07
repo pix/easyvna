@@ -27,7 +27,11 @@
 static uint16_t redraw_request = 0; // contains REDRAW_XXX flags
 
 static uint16_t area_width  = AREA_WIDTH_NORMAL;
+#ifdef __VNA_LORA_PROFILES__
+static uint16_t area_height = LORA_HEIGHT_FULL + 1;   // HEIGHT is a variable here
+#else
 static uint16_t area_height = AREA_HEIGHT_NORMAL;
+#endif
 
 // Cell render use spi buffer
 static pixel_t *cell_buffer;
@@ -1670,7 +1674,7 @@ void redraw_marker(int8_t marker) {
 static void draw_frequencies(void) {
 #ifdef __VNA_LORA_PROFILES__
   lora_screen_update();
-  if (lora_screen_on) {lora_draw_bar(); return;}   // profile screen: action bar instead
+  if (lora_bar_visible()) {lora_draw_bar(); return;}   // profile screen: action bar instead
 #endif
   char lm0 = lever_mode == LM_FREQ_0 ? S_SARROW[0] : ' ';
   char lm1 = lever_mode == LM_FREQ_1 ? S_SARROW[0] : ' ';
@@ -1697,6 +1701,9 @@ static void draw_frequencies(void) {
   lcd_set_foreground(LCD_BW_TEXT_COLOR);
   lcd_printf(FREQUENCIES_XPOS3, FREQUENCIES_YPOS,"BW:%u" S_Hz " %up", get_bandwidth_frequency(config._bandwidth), sweep_points);
   lcd_set_font(FONT_NORMAL);
+#ifdef __VNA_LORA_PROFILES__
+  lora_draw_bar_tab();          // profile screen with the bar hidden: small tab to show it again
+#endif
 }
 
 //**************************************************************************************
