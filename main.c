@@ -3000,7 +3000,7 @@ static const VNAShellCommand commands[] =
     {"profile"     , cmd_profile     , CMD_WAIT_MUTEX|CMD_BREAK_SWEEP|CMD_RUN_IN_LOAD},
 #endif
 #if defined(NANOVNA_F303) && !defined(ENABLE_HARD_FAULT_HANDLER_DEBUG)
-    {"fault"       , cmd_fault       , 0},
+    {"fault"       , cmd_fault       , CMD_WAIT_MUTEX},
 #endif
     {"trace"       , cmd_trace       , CMD_RUN_IN_LOAD},
     {"marker"      , cmd_marker      , CMD_RUN_IN_LOAD},

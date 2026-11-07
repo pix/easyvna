@@ -297,6 +297,12 @@ static int lora_band_profile(int b) {
 
 static bool lora_fullscreen_active(void) {return lora_tune_active() || lora_cmp_active();}
 
+// Full screen modes / bar changes started from the shell while the stock menu is open: close the
+// menu first (a full screen clear would leave an invisible menu with the UI still in menu mode)
+static void lora_close_menu(void) {
+  if (ui_mode != UI_NORMAL) ui_mode_normal();
+}
+
 // Band for TUNE / COMPARE: the profile band, WIDE/SURVEY: band nearest to the resonance; -1 = no profile
 static int lora_work_band(void) {
   int p = lora_active();
@@ -330,6 +336,7 @@ static bool lora_cmp_enter(void) {
   if (b < 0 || lora_fullscreen_active()) return false;
   const lora_profile_t *bp = &lora_profiles[lora_band_profile(b)];
   freq_t lo = lora_bands[b][0], hi = lora_bands[b][1], bw = hi - lo;
+  lora_close_menu();
   lora_sweep_save();
   set_sweep_points(LORA_CMP_POINTS);
   set_sweep_frequency(ST_START, lo - bw);
@@ -353,6 +360,7 @@ static bool lora_tune_enter(void) {
   if (p < 0 || lora_fullscreen_active()) return false;
   int b = lora_work_band();                        // WIDE/SURVEY: band nearest to the resonance
   const lora_profile_t *bp = &lora_profiles[lora_band_profile(b)];
+  lora_close_menu();
   lora_sweep_save();
   set_sweep_points(LORA_TUNE_POINTS);
   set_sweep_frequency(ST_START, bp->start);
@@ -894,6 +902,7 @@ void cmd_profile(int argc, char *argv[]) {
     if (argc == 2) {
       i = get_str_index(argv[1], "show|hide");
       if (i < 0) goto usage;
+      lora_close_menu();
       lora_bar_hide(i == 1);
     }
     shell_printf("bar %s\r\n", lora_bar_visible() || !lora_screen_active() ? "show" : "hide");

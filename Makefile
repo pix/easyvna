@@ -84,7 +84,13 @@ endif
 # Stack size to be allocated to the Cortex-M process stack. This stack is
 # the stack used by the main() thread.
 ifeq ($(USE_PROCESS_STACKSIZE),)
+ifeq ($(TARGET),F303)
+  # EasyVNA: the main() thread runs the USB shell; with the FPU in use a preempted thread also
+  # stacks ~200 bytes of context, 0x200 left too little margin (HardFault seen with PSP below it)
+  USE_PROCESS_STACKSIZE = 0x300
+else
   USE_PROCESS_STACKSIZE = 0x200
+endif
 endif
 # Stack size to the allocated to the Cortex-M main/exceptions stack. This
 # stack is used for processing interrupts and exceptions.
