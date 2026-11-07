@@ -31,6 +31,35 @@ by PiX (and the Claude, OpenAI and Deepseek AI band).
 > NanoVNA-H4; use at your own risk. Not affiliated with or endorsed by DiSlord / edy555.
 > GPL-3.0 like upstream.
 
+## Quick flash
+
+**NanoVNA-H4 only.** Do not flash it on a NanoVNA-H (F072), a NanoVNA V2 or a LiteVNA.
+
+1. **Download** `EasyVNA-H4-<version>.bin` (or `.hex`) from the
+   [latest release](https://github.com/pix/easyvna/releases/latest).
+2. **Enter DFU mode.**
+   - From stock firmware: power the H4 off, hold the jog wheel pushed in and switch it on. The
+     screen stays blank and the H4 shows up as USB `0483:df11`.
+   - From EasyVNA: type `reset dfu` in the USB serial shell, or use CONFIG > DFU.
+3. **Back up** (optional but wise):
+
+       dfu-util -d 0483:df11 -a 0 -s 0x08000000:262144 -U backup.bin
+
+4. **Flash:**
+
+       dfu-util -d 0483:df11 -a 0 -s 0x08000000:leave -D EasyVNA-H4-v0.1.0.bin
+
+   On Windows, [STM32CubeProgrammer](https://www.st.com/en/development-tools/stm32cubeprog.html)
+   over USB with the `.hex` file also works. Do **not** tick "full chip erase": it wipes your
+   calibrations.
+
+Your configuration and calibration slots are kept. At the first boot, pick a profile; those marked
+**NO CAL** need a quick CAL (OPEN / SHORT / LOAD). To go back, flash your backup or any
+[NanoVNA-D release](https://github.com/DiSlord/NanoVNA-D/releases).
+
+The companion browser app is [EasyVNA Web](https://github.com/pix/easyvna-web/releases/latest)
+(Windows, macOS).
+
 ## Features
 
 All of this is on top of NanoVNA-D; the stock menus stay reachable (short push on the jog wheel,
