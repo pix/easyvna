@@ -8,9 +8,9 @@ by PiX (and the Claude, OpenAI and Deepseek AI band).
 | | |
 |:---:|:---:|
 | ![869 profile with the action bar](doc/easyvna/profile-869-swr-rl.png) | ![TUNE big digits](doc/easyvna/tune.png) |
-| 869 MHz profile: SWR + return loss, band edges, info block, action bar | TUNE: shorten / lengthen in big digits |
+| 869 MHz profile with the action bar: resonance 868.87 MHz, SWR 1.05, band OK (worst 1.12) | TUNE: resonance 867.92 MHz, ON TARGET, SWR 1.06 at 869 MHz |
 | ![S21 COMPARE](doc/easyvna/compare-live.png) | ![HOLD envelope](doc/easyvna/hold.png) |
-| S21 COMPARE: antenna B vs antenna A | HOLD: SWR envelope over antenna positions |
+| S21 COMPARE: antenna B +2.7 dB vs A (illustrative: A was stored while something moved) | HOLD: 4 positions, resonance 851-878 MHz, worst in-band SWR 1.36 |
 
 ## Why EasyVNA
 
@@ -75,11 +75,11 @@ or a tap on an empty part of the plot).
 | | |
 |:---:|:---:|
 | ![Power-on chooser](doc/easyvna/boot-chooser.png) | ![All traces view](doc/easyvna/profile-869-all.png) |
-| Power-on chooser | 869 profile, all traces (SWR, RL, X, Smith) |
-| ![REF overlay](doc/easyvna/ref-overlay.png) | ![SURVEY](doc/easyvna/survey.png) |
-| REF overlay | SURVEY with the dip list |
+| Splash and power-on chooser (first start after flashing) | 869 profile, all traces (SWR, RL, X, Smith), action bar hidden |
+| ![REF overlay](doc/easyvna/ref-overlay.png) | ![WIDE](doc/easyvna/wide.png) |
+| REF (dashed): hand near the antenna, resonance shift -9.09 MHz | WIDE (300-1000 MHz) antenna identification |
 | ![COMPARE step 1](doc/easyvna/compare-step1.png) | ![Bar hidden](doc/easyvna/bar-hidden.png) |
-| S21 COMPARE, step 1 | Action bar hidden (double-tap) |
+| S21 COMPARE step 1 (in-band S21 -50.5 dB) | Action bar hidden (double-tap): full-height plot, frequency line and the tab to bring it back |
 | ![Profile chooser (render)](doc/easyvna/profile-chooser-render.png) | ![QUICK CAL wizard (render)](doc/easyvna/cal-wizard-render.png) |
 | PROFILE chooser *(emulator render)* | QUICK CAL wizard *(emulator render)* |
 
@@ -137,6 +137,9 @@ HOLD, S21 COMPARE, the `profile` shell protocol and USB DFU flashing (`reset dfu
 The QUICK CAL wizard and the touch / jog handling (double-tap timing, long press, drags) were only
 tried on that single unit. The HOLD motion threshold and the SURVEY / LOSSY thresholds were set from
 a few real sweeps and may need adjusting for other antennas.
+
+Known issue: changing the action bar via the shell (`profile bar`) while the info box is being
+dragged can leave the screen out of sync until the next redraw.
 
 ## License
 
