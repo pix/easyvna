@@ -86,10 +86,11 @@
 #define __VNA_MEASURE_MODULE__
 // Add Z normalization feature
 //#define __VNA_Z_RENORMALIZATION__
-// Add quick antenna profiles (LoRa bands) and quick S11 calibration menu (vna_modules/vna_profiles.c)
-#define __VNA_LORA_PROFILES__
-// Boot splash screen (vna_modules/vna_splash.c), H4 only (NanoVNA-H F072 flash is full)
+// Add quick antenna profiles (LoRa bands), quick S11 calibration menu and profile screen
+// (vna_modules/vna_profiles.c, vna_lora_plot.c) and boot splash screen (vna_modules/vna_splash.c),
+// H4 only (NanoVNA-H F072 flash is full)
 #ifdef NANOVNA_F303
+#define __VNA_LORA_PROFILES__
 #define __VNA_SPLASH__
 #endif
 
@@ -1427,9 +1428,19 @@ void ui_message_box(const char *header, const char *text, uint32_t delay);
 void ui_splash(void);
 #endif
 #ifdef __VNA_LORA_PROFILES__
-// vna_modules/vna_profiles.c (ui.c): active profile title (NULL if sweep range is not a profile),
-// target (band centre, 0 for none) and whether the applied calibration matches the profile
-const char *lora_profile_title(freq_t *target, bool *cal_ok);
+// vna_modules/vna_profiles.c (ui.c): active profile info for the plot (false if the sweep range
+// is not a profile)
+#define LORA_MK_MAX     3              // markers after M1 (band edges, WIDE: band centres)
+enum {LORA_CAL_OK = 0, LORA_CAL_RANGE, LORA_CAL_NONE};
+typedef struct {
+  const char   *title;
+  const freq_t (*band)[2];             // ISM band(s) to shade
+  const freq_t *mk;                    // WIDE: nominal M2.. frequencies (labels), NULL = band edges
+  freq_t        target;                // band centre for the offset readout (0 = none)
+  uint8_t       nband;                 // 1 = band profile (pass/fail on band[0]), >1 = WIDE
+  uint8_t       cal;                   // LORA_CAL_xx: cal over profile range / other range / none
+} lora_screen_t;
+bool lora_profile_screen(lora_screen_t *s);
 // Power on: chooser on splash (or silent) + apply last used profile/custom, call after ui_init()
 void lora_profile_boot(void);
 // vna_modules/vna_lora_plot.c (plot.c): autoscale enable bit per trace

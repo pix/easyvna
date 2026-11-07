@@ -56,6 +56,11 @@ typedef struct {
 } index_t;
 static index_t trace_index[TRACE_INDEX_COUNT][SWEEP_POINTS_MAX];
 
+#ifdef __VNA_LORA_PROFILES__
+// LoRa profile screen active (profile range + LORA INFO), see vna_modules/vna_lora_plot.c
+static bool lora_screen_on = false;
+#endif
+
 #if 1
 // All used in plot v > 0
 #define float2int(v) ((int)((v)+0.5f))
@@ -317,11 +322,17 @@ typedef struct {
   int32_t x, y;
 } cellPrintStream;
 
+#if defined(_USE_SHADOW_TEXT_) || defined(__VNA_LORA_PROFILES__)
+static bool cell_text_shadow = true;  // false: plain text (dark text on coloured chips)
+#endif
 static int32_t put_normal(int x, int y, uint8_t ch) {
   uint32_t w = FONT_GET_WIDTH(ch);
   uint32_t step = FONT_WIDTH > 8 && w <= 8 ? 9 : w;
 #ifdef _USE_SHADOW_TEXT_
-  cell_blit_bitmap_shadow(x-1, y-1, step, FONT_GET_HEIGHT, FONT_GET_DATA(ch));
+  if (cell_text_shadow)
+    cell_blit_bitmap_shadow(x-1, y-1, step, FONT_GET_HEIGHT, FONT_GET_DATA(ch));
+  else
+    cell_blit_bitmap(x, y, step, FONT_GET_HEIGHT, FONT_GET_DATA(ch));
 #else
   cell_blit_bitmap(x, y, step, FONT_GET_HEIGHT, FONT_GET_DATA(ch));
 #endif
@@ -921,6 +932,9 @@ void request_to_draw_marker(uint16_t mk_idx) {
 
 // Calculate marker area size depend from trace/marker count and options
 static int marker_area_max(void) {
+#ifdef __VNA_LORA_PROFILES__
+  if (lora_screen_on) return 0;  // profile screen: no stock marker readout
+#endif
   int t_count = 0, m_count = 0, i;
   for (i = 0; i < TRACES_MAX; i++) if (trace[i].enabled) t_count++;
   for (i = 0; i < MARKERS_MAX; i++) if (markers[i].enabled) m_count++;
@@ -1100,7 +1114,7 @@ static const struct {
   [MEASURE_S11_RESONANCE]= {MESAURE_S11, MEASURE_UPD_ALL,  draw_s11_resonance, prepare_s11_resonance},
 #endif
 #ifdef __VNA_LORA_PROFILES__
-  [MEASURE_LORA_INFO]   = {MESAURE_S11, MEASURE_UPD_SWEEP,   draw_lora_info, prepare_lora_info},
+  [MEASURE_LORA_INFO]   = {MESAURE_S11, MEASURE_UPD_ALL,     draw_lora_info, prepare_lora_info},
 #endif
 };
 
@@ -1193,6 +1207,7 @@ static void plot_into_index(void) {
   markmap_all_markers();
 //  START_PROFILE;
 #ifdef __VNA_LORA_PROFILES__
+  lora_screen_update();
   lora_autoscale();
 #endif
   // Cache trace data indexes, and mark plot area for update
@@ -1202,6 +1217,9 @@ static void plot_into_index(void) {
 //  STOP_PROFILE;
   // Marker track on data update
   if (props_mode & TD_MARKER_TRACK)
+#ifdef __VNA_LORA_PROFILES__
+    if (!lora_track())
+#endif
     marker_search();
 #ifdef __VNA_MEASURE_MODULE__
   // Current scan update
@@ -1271,6 +1289,9 @@ static void cell_draw_marker_info(int x0, int y0) {
   int t, mk, xpos, ypos;
   if (active_marker == MARKER_INVALID || current_trace == TRACE_INVALID) // No markers or no traces
     return;
+#ifdef __VNA_LORA_PROFILES__
+  if (lora_screen_on) return;    // profile screen: readout is in the LORA INFO block
+#endif
   int active_marker_idx = markers[active_marker].index;
   int j = 0;
   // Marker (for current selected trace) display mode (selected more then 1 marker)
@@ -1422,6 +1443,9 @@ static void draw_cell(int x0, int y0) {
 #else
 #error "Write cell fill for different  LCD_PIXEL_SIZE"
 #endif
+#ifdef __VNA_LORA_PROFILES__
+  lora_cell_background(x0, w, h);
+#endif
 
 // Draw grid
 #if 1
@@ -1461,6 +1485,9 @@ static void draw_cell(int x0, int y0) {
   else if (trace_type & (1 << TRC_POLAR))
     cell_polar_grid(x0, y0, w, h, c);
 #endif
+#ifdef __VNA_LORA_PROFILES__
+  lora_cell_guides(x0, y0, w);
+#endif
 
   // Draw traces
   for (t = TRACE_INDEX_COUNT-1; t >=0; t--) {
@@ -1477,6 +1504,12 @@ static void draw_cell(int x0, int y0) {
       int x2 = index[i + 1].x - x0;
       int y2 = index[i + 1].y - y0;
       cell_drawline(x1, y1, x2, y2, c);
+#ifdef __VNA_LORA_PROFILES__
+      if (t == 0 && lora_screen_on) {        // profile screen: bold SWR trace
+        cell_drawline(x1, y1 + 1, x2, y2 + 1, c);
+        cell_drawline(x1 + 1, y1, x2 + 1, y2, c);
+      }
+#endif
     }
   }
 
@@ -1496,6 +1529,9 @@ static void draw_cell(int x0, int y0) {
     for (t = 0; t < TRACES_MAX; t++) {
       if (!trace[t].enabled)
         continue;
+#ifdef __VNA_LORA_PROFILES__
+      if (!lora_marker_on_trace(t)) continue;
+#endif
       index_t *index = trace_index[t];
       const uint8_t *plate, *marker;
       x = index[mk_idx].x - x0 - X_MARKER_OFFSET;
@@ -1556,6 +1592,9 @@ void set_area_size(uint16_t w, uint16_t h) {
 }
 
 static void draw_all_cells(void) {
+#ifdef __VNA_LORA_PROFILES__
+  lora_screen_update();
+#endif
 #ifdef __VNA_MEASURE_MODULE__
   measure_prepare();
 #endif
@@ -1660,9 +1699,9 @@ static void draw_cal_status(void) {
     lcd_set_foreground(LCD_FG_COLOR);
   }
 #ifdef __VNA_LORA_PROFILES__
-  // Active LoRa profile without matching calibration: red "NC" (no cal) in place of 'Cn'
-  bool lora_cal_ok;
-  if (lora_profile_title(NULL, &lora_cal_ok) && !lora_cal_ok) {
+  // Active LoRa profile without calibration: red "NC" (no cal) in place of 'Cn'
+  lora_screen_t ls;
+  if (lora_profile_screen(&ls) && ls.cal == LORA_CAL_NONE) {
     lcd_set_foreground(LCD_LOW_BAT_COLOR);
     lcd_fill(x, y, OFFSETX - x, sFONT_STR_HEIGHT);
     lcd_drawstring(x, y, "NC");

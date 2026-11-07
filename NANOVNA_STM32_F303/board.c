@@ -62,9 +62,40 @@ const PALConfig pal_default_config = {
 };
 #endif
 
+/*
+ * Enter the ROM (system memory) USB DFU bootloader from the running firmware.
+ *
+ * Jumping straight from the running firmware leaves PLL clocks, SysTick, the USB
+ * peripheral and its NVIC interrupt, the app vector table and the process stack in
+ * place, and the host never sees a detach (D+ has a fixed 1.5k pull-up on this board),
+ * so the ROM DFU never enumerates. Instead: set a magic word in CCM RAM (not cleared
+ * by the startup code), pull D+ low so the host sees a disconnect, reset the MCU, and
+ * jump to the bootloader from __early_init() with the chip in its reset state.
+ */
+#define DFU_MAGIC 0xDF0B007AU
+static volatile uint32_t dfu_request __attribute__((section(".ram4")));
+
 void boardDFUEnter(void) {
-  __set_MSP(*((uint32_t *)(STM32F303xC_SYSTEM_MEMORY)));
-  ((void (*)(void))(*((uint32_t *)(STM32F303xC_SYSTEM_MEMORY + 4))))(); // jump to DFU
+  osalThreadSleepMilliseconds(20);         // let the last shell/UI output go out
+  dfu_request = DFU_MAGIC;
+  // USB detach: drive D+ low (same as usb_lld_disconnect_bus on this board)
+  GPIOA->BSRR  = 1U << (GPIOA_USB_DP + 16);
+  GPIOA->MODER = (GPIOA->MODER & ~(3U << (GPIOA_USB_DP * 2))) | (1U << (GPIOA_USB_DP * 2));
+  osalThreadSleepMilliseconds(50);
+  NVIC_SystemReset();
+}
+
+static void __attribute__((noreturn)) dfu_jump(void) {
+  uint32_t sp = *((volatile uint32_t *)(STM32F303xC_SYSTEM_MEMORY));
+  uint32_t pc = *((volatile uint32_t *)(STM32F303xC_SYSTEM_MEMORY + 4));
+  // Map system memory at 0x0 (bootloader vectors), main stack, thread mode on MSP (crt0 runs on PSP)
+  RCC->APB2ENR|= RCC_APB2ENR_SYSCFGEN;
+  SYSCFG->CFGR1 = (SYSCFG->CFGR1 & ~SYSCFG_CFGR1_MEM_MODE) | SYSCFG_CFGR1_MEM_MODE_0;
+  __asm volatile ("msr msp, %0   \n"
+                  "msr control, %2\n"
+                  "isb           \n"
+                  "bx  %1        \n" :: "r"(sp), "r"(pc), "r"(0) : "memory");
+  while (1);
 }
 
 /*
@@ -73,6 +104,14 @@ void boardDFUEnter(void) {
  * any other initialization.
  */
 void __early_init(void) {
+  if (dfu_request == DFU_MAGIC) {
+    dfu_request = 0;
+    // Keep the LCD backlight on (DAC1 ch2, H4) so the DFU message stays readable
+    RCC->APB1ENR|= RCC_APB1ENR_DAC1EN;
+    DAC->DHR12R2 = 3000;
+    DAC->CR|= DAC_CR_EN2;
+    dfu_jump();
+  }
   stm32_clock_init();
 }
 

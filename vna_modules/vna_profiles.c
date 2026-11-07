@@ -6,9 +6,11 @@
  * Plot side (autoscale, LORA INFO text) is in vna_lora_plot.c (included from plot.c).
  *
  * PROFILES menu:
- *   - each profile sets sweep range + points, an S11-only display (SWR, LOGMAG, X,
- *     Smith, all CH0, autoscaled), the LORA INFO text, marker 1 tracking the SWR
- *     minimum and (band profiles) markers 2/3 on the band edges.
+ *   - each profile sets sweep range + points, an S11-only display (SWR bold + RL, or
+ *     SWR + Smith, or all of SWR/RL/X/Smith: VIEW), autoscaled, the LORA INFO block,
+ *     marker 1 tracking the SWR minimum and markers on the ISM band edges (WIDE: on the
+ *     433/868/915 band centres). Everything else (other markers, delta/reference marker,
+ *     stored trace, lever mode) is reset.
  *   - each profile owns a fixed save slot (the last 4 slots); if that slot holds a
  *     calibration made over exactly the profile range/points it is recalled first,
  *     otherwise QUICK CAL is opened (from the menu).
@@ -24,6 +26,7 @@
  *   - "profile"              list: name start stop points slot cal(0/1) active(0/1),
  *                            then "boot <name> ask=<0|1>"
  *   - "profile <name>"       apply profile (wide|433|869|915|custom), prints its line
+ *   - "profile view [rl|smith|all]"  show / set the profile VIEW (SWR+RL, SWR+Smith, all)
  *
  * This is free software; you can redistribute it and/or modify it under the
  * terms of the GNU General Public License as published by the Free Software
@@ -36,20 +39,28 @@ typedef struct {
   const char *title;    // screen title
   const char *label;    // menu label (name + range)
   freq_t start, stop;   // sweep range
-  freq_t band_lo;       // band edge markers (0 = none)
-  freq_t band_hi;
+  int8_t band;          // ISM band in lora_bands[] (shading, edge markers, pass/fail), -1 = all (WIDE)
   freq_t target;        // band centre used for the offset readout (0 = none)
 } lora_profile_t;
+
+// ISM bands (edge markers, shading)
+static const freq_t lora_bands[][2] = {
+  {433050000U, 434790000U},   // 433 ISM (EU/ITU region 1)
+  {863000000U, 870000000U},   // 868 EU SRD
+  {902000000U, 928000000U},   // 915 US ISM
+};
+// WIDE: markers on the band centres
+static const freq_t lora_wide_mk[LORA_MK_MAX] = {433920000U, 868000000U, 915000000U};
 
 // Shell names list, must be in the same order as lora_profiles[]
 #define LORA_PROFILE_NAMES "wide|433|869|915"
 // Band profiles: centre +-~10% (dip of a detuned antenna stays in view), 401 points
 // (225..450 kHz step, 8..58 points inside the band). WIDE: find a far detuned antenna.
 static const lora_profile_t lora_profiles[] = {
-  {"wide", "WIDE 300M-1G", "WIDE\n300M-1G",   300000000U, 1000000000U,          0,          0,          0},
-  {"433",  "433 ISM",      "433 ISM\n389-479M", 388920000U,  478920000U, 433050000U, 434790000U, 433920000U},
-  {"869",  "869 EU",       "869 EU\n779-959M",  779000000U,  959000000U, 863000000U, 870000000U, 869000000U},
-  {"915",  "915 US",       "915 US\n825-1005M", 825000000U, 1005000000U, 902000000U, 928000000U, 915000000U},
+  {"wide", "WIDE 300M-1G", "WIDE\n300M-1G",   300000000U, 1000000000U, -1,          0},
+  {"433",  "433 ISM",      "433 ISM\n389-479M", 388920000U,  478920000U,  0, 433920000U},
+  {"869",  "869 EU",       "869 EU\n779-959M",  779000000U,  959000000U,  1, 869000000U},
+  {"915",  "915 US",       "915 US\n825-1005M", 825000000U, 1005000000U,  2, 915000000U},
 };
 #define LORA_PROFILE_COUNT ((int)ARRAY_COUNT(lora_profiles))
 #define LORA_POINTS        POINTS_COUNT_DEFAULT
@@ -58,9 +69,17 @@ static const lora_profile_t lora_profiles[] = {
 #define LORA_CUSTOM        LORA_PROFILE_COUNT   // index used for CUSTOM
 #define lora_slot(i)       (SAVEAREA_MAX - LORA_PROFILE_COUNT + (i))
 #define lora_custom_slot   lora_slot(-1)
-// Persistent state in a spare config byte: bits 0..3 = last used index + 1, bit 7 = do not ask at boot
+// Persistent state in a spare config byte: bits 0..3 = last used index + 1, bits 4..5 = VIEW,
+// bit 7 = do not ask at boot
 #define lora_cfg           config._reserved[0]
 #define LORA_CFG_NO_ASK    0x80
+#define LORA_CFG_VIEW_SHIFT 4
+#define LORA_CFG_VIEW_MASK  (3<<LORA_CFG_VIEW_SHIFT)
+// VIEW: which of the profile traces (0 SWR, 1 LOGMAG/RL, 2 X, 3 Smith) are shown
+enum {LORA_VIEW_RL = 0, LORA_VIEW_SMITH, LORA_VIEW_ALL, LORA_VIEW_COUNT};
+static const uint8_t lora_view_traces[LORA_VIEW_COUNT] = {0x03, 0x09, 0x0F};
+static const char *lora_view_names[LORA_VIEW_COUNT]    = {"SWR+RL", "SWR+SMITH", "ALL"};
+#define LORA_VIEW_SHELL    "rl|smith|all"
 
 #if SAVEAREA_MAX < 5
 #error "LoRa profiles need at least 5 save slots"
@@ -92,18 +111,74 @@ static bool lora_has_cal(int i) {
             && sp->_cal_sweep_points == LORA_POINTS;
 }
 
-const char *lora_profile_title(freq_t *target, bool *cal_ok) {
+// Screen info for the plot side (vna_lora_plot.c), false if the sweep range is not a profile
+bool lora_profile_screen(lora_screen_t *s) {
   int i = lora_active();
-  if (i < 0) return NULL;
-  if (target) *target = lora_profiles[i].target;
-  if (cal_ok) *cal_ok = lora_cal_ok(&lora_profiles[i]);
-  return lora_profiles[i].title;
+  if (i < 0) return false;
+  const lora_profile_t *p = &lora_profiles[i];
+  s->title  = p->title;
+  s->target = p->target;
+  if (p->band >= 0) {s->band = &lora_bands[p->band]; s->nband = 1; s->mk = NULL;}
+  else              {s->band = lora_bands; s->nband = ARRAY_COUNT(lora_bands); s->mk = lora_wide_mk;}
+  s->cal = lora_cal_ok(p) ? LORA_CAL_OK : (cal_status & CALSTAT_APPLY) ? LORA_CAL_RANGE : LORA_CAL_NONE;
+  return true;
+}
+
+static int lora_view(void) {
+  int v = (lora_cfg & LORA_CFG_VIEW_MASK) >> LORA_CFG_VIEW_SHIFT;
+  return v < LORA_VIEW_COUNT ? v : LORA_VIEW_RL;
+}
+
+// Show the VIEW trace set (profile layout: 0 SWR, 1 LOGMAG, 2 X, 3 Smith)
+static void lora_view_apply(void) {
+  uint8_t mask = lora_view_traces[lora_view()];
+  for (int t = 0; t < TRACES_MAX; t++)
+    trace[t].enabled = (mask >> t) & 1;
+  current_trace = 0;
+  request_to_redraw(REDRAW_AREA | REDRAW_MARKER);
+}
+
+static void lora_view_set(int v) {
+  lora_cfg = (lora_cfg & ~LORA_CFG_VIEW_MASK) | (v << LORA_CFG_VIEW_SHIFT);
+  config_save();
+  if (lora_active() >= 0) lora_view_apply();
 }
 
 static void lora_marker_at(int m, freq_t f) {
   markers[m].enabled = TRUE;
   int idx = (float)(f - frequency0) * (sweep_points - 1) / (float)(frequency1 - frequency0) + 0.5f;
   set_marker_index(m, idx);
+}
+
+// Reset all marker/trace leftovers, then M1 (SWR minimum, tracking) + band markers M2..
+static void lora_markers_reset(const lora_profile_t *p) {
+  // Erase old marker plates, disable all markers
+  for (int m = 0; m < MARKERS_MAX; m++) {
+    if (markers[m].enabled) request_to_draw_marker(markers[m].index);
+    markers[m].enabled = FALSE;
+  }
+  // Stored (reference) traces off
+#if STORED_TRACES > 0
+  uint8_t st = getStoredTraces();
+  for (int i = 0; i < STORED_TRACES; i++)
+    if (st & (1<<i)) toogleStoredTrace(i);
+#endif
+  // No delta / reference marker, tracking on, jog moves the marker
+  props_mode = (props_mode & ~TD_MARKER_DELTA) | TD_MARKER_TRACK;
+  previous_marker = MARKER_INVALID;
+  active_marker   = 0;
+  select_lever_mode(LM_MARKER);
+  // M1: SWR minimum (tracked after each sweep), start at centre
+  markers[0].enabled = TRUE;
+  set_marker_index(0, sweep_points / 2);
+  // M2.. band edges, WIDE: band centres
+  if (p->band >= 0) {
+    lora_marker_at(1, lora_bands[p->band][0]);
+    lora_marker_at(2, lora_bands[p->band][1]);
+  } else {
+    for (int m = 0; m < LORA_MK_MAX; m++)
+      lora_marker_at(1 + m, lora_wide_mk[m]);
+  }
 }
 
 // Store last used profile/custom for power on (writes config to flash only if changed)
@@ -126,9 +201,9 @@ static bool lora_profile_apply(int idx, bool remember) {
   set_sweep_points(LORA_POINTS);
   set_sweep_frequency(ST_START, p->start);
   set_sweep_frequency(ST_STOP,  p->stop);
-  if (p->band_lo) FREQ_CENTERSPAN();  // show "CENTER xxx SPAN yyy" for band profiles
-  // Frequency domain, no delta markers, marker tracking on
-  props_mode = (props_mode & ~(DOMAIN_MODE|TD_MARKER_DELTA)) | TD_MARKER_TRACK;
+  if (p->band >= 0) FREQ_CENTERSPAN();  // show "CENTER xxx SPAN yyy" for band profiles
+  // Frequency domain
+  props_mode&= ~DOMAIN_MODE;
   plot_set_measure_mode(MEASURE_LORA_INFO);
   // S11 only display, scale/ref are initial values, autoscale adjusts them after each sweep
   static const trace_t lora_trace[TRACES_MAX] = {
@@ -138,19 +213,9 @@ static bool lora_profile_apply(int idx, bool remember) {
     { TRUE, TRC_SMITH,  0, MS_RX,  1.0f, 0        },
   };
   memcpy(trace, lora_trace, sizeof(lora_trace));
-  current_trace = 0;
+  lora_view_apply();                                  // VIEW: enabled traces, current = SWR
   lora_autoscale_mask = lora_autoscale_on ? 0x0F : 0;
-  // Markers: M1 = SWR minimum (tracking), M2/M3 = band edges
-  for (int m = 0; m < MARKERS_MAX; m++)
-    markers[m].enabled = FALSE;
-  markers[0].enabled = TRUE;
-  active_marker   = 0;
-  previous_marker = MARKER_INVALID;
-  if (p->band_lo) {
-    lora_marker_at(1, p->band_lo);
-    lora_marker_at(2, p->band_hi);
-    previous_marker = 1;
-  }
+  lora_markers_reset(p);
   // Marker search = minimum (global config option)
   apply_VNA_mode(VNA_MODE_SEARCH, VNA_MODE_SET);
   if (remember) lora_remember(idx);
@@ -394,6 +459,15 @@ static UI_FUNCTION_ADV_CALLBACK(menu_lora_autoscale_acb) {
   request_to_redraw(REDRAW_PLOT);
 }
 
+static UI_FUNCTION_ADV_CALLBACK(menu_lora_view_acb) {
+  (void)data;
+  if (b) {
+    plot_printf(b->label, sizeof(b->label), "VIEW\n%s", lora_view_names[lora_view()]);
+    return;
+  }
+  lora_view_set((lora_view() + 1) % LORA_VIEW_COUNT);
+}
+
 static UI_FUNCTION_ADV_CALLBACK(menu_lora_ask_acb) {
   (void)data;
   if (b) {
@@ -431,12 +505,13 @@ static const menuitem_t menu_profiles[] = {
   { MT_ADV_CALLBACK, 3, "915",  menu_lora_profile_acb },
   { MT_ADV_CALLBACK, 0, "CUSTOM", menu_lora_custom_acb },
   { MT_CALLBACK,     0, "QUICK CAL", menu_qcal_cb },
+  { MT_ADV_CALLBACK, 0, "VIEW",      menu_lora_view_acb },
   { MT_SUBMENU,      0, "OPTIONS", menu_lora_options },
   { MT_NEXT, 0, NULL, menu_back } // next-> menu_back
 };
 
 //=====================================================================================================
-// Shell command: profile [wide|433|869|915|custom]
+// Shell command: profile [wide|433|869|915|custom] | profile view [rl|smith|all]
 //=====================================================================================================
 int shell_printf(const char *fmt, ...);
 static void lora_profile_print(int i) {
@@ -461,6 +536,14 @@ void cmd_profile(int argc, char *argv[]) {
     i = (lora_cfg & 0x0F) - 1;
     shell_printf("boot %s ask=%d\r\n", (i >= 0 && i < LORA_PROFILE_COUNT) ? lora_profiles[i].name : "custom",
                  lora_boot_asks() ? 1 : 0);
+    shell_printf("view %s\r\n", lora_view_names[lora_view()]);
+    return;
+  }
+  if (get_str_index(argv[0], "view") == 0) {
+    if (argc == 2 && (i = get_str_index(argv[1], LORA_VIEW_SHELL)) >= 0)
+      lora_view_set(i);
+    else if (argc != 1) goto usage;
+    shell_printf("view %s\r\n", lora_view_names[lora_view()]);
     return;
   }
   if (argc == 1 && (i = get_str_index(argv[0], LORA_PROFILE_NAMES "|custom")) >= 0) {
@@ -468,6 +551,7 @@ void cmd_profile(int argc, char *argv[]) {
     if (i < LORA_PROFILE_COUNT) lora_profile_print(i); else lora_custom_print();
     return;
   }
-  shell_printf("usage: profile [" LORA_PROFILE_NAMES "|custom]\r\n");
+usage:
+  shell_printf("usage: profile [" LORA_PROFILE_NAMES "|custom] | profile view [" LORA_VIEW_SHELL "]\r\n");
 }
 #endif // __VNA_LORA_PROFILES__
