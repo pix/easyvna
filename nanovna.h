@@ -575,7 +575,12 @@ void tlv320aic3204_write_reg(uint8_t page, uint8_t reg, uint8_t data);
 // Plot area WIDTH better be n*(POINTS_COUNT-1)
 #define WIDTH                       455
 // Plot area HEIGHT = NGRIDY * GRIDY
+#ifdef __VNA_LORA_PROFILES__
+// LoRa profiles: plot 24 px lower, the bottom 39 px hold the profile action bar (6 big buttons)
+#define HEIGHT                      280
+#else
 #define HEIGHT                      304
+#endif
 
 // GRIDX calculated depends from frequency span
 // GRIDY depend from HEIGHT and NGRIDY, must be integer
@@ -1447,6 +1452,32 @@ bool lora_marker_shown(int t);
 bool lora_info_rect(int *x, int *y, int *w, int *h);
 void lora_info_place(int x, int y);
 bool lora_info_moved(void);
+// Profile screen tools (vna_lora_plot.c)
+typedef struct {
+  const char *title;                   // profile title
+  freq_t      target;                  // tune target (band centre)
+  freq_t      band_lo, band_hi;        // band to shade in the SWR strip
+  uint8_t     cal;                     // LORA_CAL_xx at entry
+} lora_tune_t;
+void  lora_tune_start(const lora_tune_t *t);   // TUNE full screen on (caller sets the sweep)
+void  lora_tune_stop(void);
+bool  lora_tune_active(void);
+bool  lora_fullscreen_draw(void);              // draw_all() hook: true = full screen mode drew
+void  lora_toast(const char *text);            // 1 s message over the plot
+bool  lora_ref_store(void);                    // REF: store current S11 + results (RAM, CCM)
+void  lora_ref_clear(void);
+bool  lora_ref_valid(void);                    // stored for the current sweep range
+float lora_res_freq(void);                     // last resonance (Hz)
+#define LORA_PRINT_INFO 1
+#define LORA_PRINT_REF  2
+#define LORA_PRINT_TUNE 4
+void  lora_info_print(uint8_t mask);           // shell: profile info / ref / tune lines
+// vna_profiles.c (ui.c): profile action bar (replaces the frequency line on the profile screen)
+void  lora_draw_bar(void);
+// main.c: run shell commands queued for the sweep thread (modal screens keep 'capture' working)
+void  shell_poll_pending(void);
+// New buffers live in CCM RAM (CPU only, no DMA), zeroed at startup
+#define LORA_CCM __attribute__((section(".ram4_clear")))
 // Power on: chooser on splash (or silent) + apply last used profile/custom, call after ui_init()
 void lora_profile_boot(void);
 // vna_modules/vna_lora_plot.c (plot.c): autoscale enable bit per trace

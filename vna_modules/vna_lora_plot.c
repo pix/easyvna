@@ -333,9 +333,18 @@ typedef struct {
   float   swr, rl, r, x;
   float   f_lo, f_hi; // SWR<=2 edges
   float   worst;      // worst SWR inside the band (band profile), < 0 = none
+  float   ml;         // mismatch loss at the minimum (dB)
+  float   dip_f[3], dip_swr[3]; // WIDE/SURVEY: best dips
   uint16_t res_idx;   // point of the minimum (M1 tracking)
   uint8_t bw;         // bit0: SWR<=2 range found, bit1: open at left, bit2: open at right
+  uint8_t flag;       // LORA_FLAG_xx antenna sanity
+  uint8_t ndip;
 } lora_measure_t;
+enum {LORA_FLAG_OK = 0, LORA_FLAG_OPEN, LORA_FLAG_SHORT, LORA_FLAG_LOSSY};
+static const char *lora_flag_names[] = {"ok", "open", "short", "lossy"};
+
+// Mismatch loss (dB) from |G|^2
+static float lora_ml(float g2) {return g2 < 1.0f ? -vna_log10f_x_10(1.0f - g2) : 99.0f;}
 static lora_measure_t *lora_meas = (lora_measure_t *)measure_memory;
 
 static float lora_g2(uint16_t i) { return get_l(measured[0][i][0], measured[0][i][1]); }
@@ -362,6 +371,371 @@ static bool lora_track(void) {
   if (markers[0].enabled)
     set_marker_index(0, lora_min_index());
   return true;
+}
+
+// Antenna sanity: |G| > 0.95 on every point = nothing connected (open) or a short; on a wide
+// sweep, SWR < 2 on most points with little reactance = resistive load / lossy fake antenna
+static void lora_sanity(lora_measure_t *m) {
+  int n = sweep_points, high = 0, low = 0;
+  float re = 0.0f, xmax = 0.0f;
+  for (int i = 0; i < n; i++) {
+    float g2 = lora_g2(i);
+    if (g2 > 0.9025f) high++;
+    if (g2 < 1.0f / 9.0f) {
+      low++;
+      float x = vna_fabsf(reactance(i, measured[0][i]));
+      if (x > xmax) xmax = x;
+    }
+    re+= measured[0][i][0];
+  }
+  m->flag = LORA_FLAG_OK;
+  if (high == n)
+    m->flag = re > 0.0f ? LORA_FLAG_OPEN : LORA_FLAG_SHORT;
+  else if (lp.s.nband > 1 && low * 10 >= n * 6 && xmax < 30.0f)
+    m->flag = LORA_FLAG_LOSSY;
+}
+
+// Prominence walk from local minimum i in direction dir: true if |G|^2 rises by LORA_DIP_RISE before
+// a deeper point is met (sweep edge counts as risen, a dip at the edge of the range is still a dip)
+#define LORA_DIP_RISE 0.05f
+static bool lora_dip_side(int i, int dir) {
+  float g = lora_g2(i), top = g;
+  for (int j = i + dir; j >= 0 && j < sweep_points; j+= dir) {
+    float v = lora_g2(j);
+    if (v < g) return false;
+    if (v >= g + LORA_DIP_RISE) return true;
+    if (v > top) top = v;
+  }
+  return top >= g + 0.5f * LORA_DIP_RISE;         // at the sweep edge: half the rise is enough
+}
+
+// WIDE/SURVEY: up to 3 dips (local |G| minimum below SWR 3 with a prominence of 0.05 |G|^2 on both
+// sides), best first
+static void lora_dips(lora_measure_t *m) {
+  m->ndip = 0;
+  if (!lora_screen_on || lp.s.nband < 2) return;
+  int n = sweep_points, idx[3];
+  for (int i = 0; i < n; i++) {
+    float g = lora_g2(i);
+    if (g >= 0.25f || (i > 0 && g >= lora_g2(i-1)) || (i < n - 1 && g > lora_g2(i+1))) continue;
+    if (!lora_dip_side(i, -1) || !lora_dip_side(i, 1)) continue;
+    // insert sorted by depth
+    int k = m->ndip < 3 ? m->ndip++ : 3;
+    while (k > 0 && lora_g2(idx[k-1]) > g) {if (k < 3) idx[k] = idx[k-1]; k--;}
+    if (k < 3) idx[k] = i;
+  }
+  for (int k = 0; k < m->ndip; k++) {
+    m->dip_f[k]   = (float)getFrequency(idx[k]);
+    m->dip_swr[k] = swr(idx[k], measured[0][idx[k]]);
+  }
+}
+
+// Nearest LoRa band centre (MHz) to f
+static uint32_t lora_near_band(float f) {
+  static const uint16_t c[] = {433, 868, 915};
+  int b = 0;
+  for (int k = 1; k < 3; k++) if (vna_fabsf(f - c[k] * 1e6f) < vna_fabsf(f - c[b] * 1e6f)) b = k;
+  return c[b];
+}
+
+//=====================================================================================================
+// REF: S11 reference (|G|^2 per point + results), RAM only (CCM), drawn dim grey in the stored trace slot
+//=====================================================================================================
+#define LORA_REF_COLOR RGB565(120,120,120)
+typedef struct {
+  freq_t   f0, f1;
+  uint16_t points;
+  bool     valid, shown;
+  float    f_res, swr, bw;
+  float    g2[SWEEP_POINTS_MAX];
+} lora_ref_t;
+static lora_ref_t lora_ref LORA_CCM;
+
+static bool lora_ref_here(void) {
+  return lora_ref.valid && lora_ref.f0 == frequency0 && lora_ref.f1 == frequency1 && lora_ref.points == sweep_points;
+}
+bool lora_ref_valid(void) {return lora_ref_here();}   // stored for the current range
+float lora_res_freq(void) {return lora_meas->f_res;}
+
+bool lora_ref_store(void) {
+  if (!lora_screen_on) return false;
+  const lora_measure_t *m = lora_meas;
+  for (int i = 0; i < sweep_points; i++) lora_ref.g2[i] = lora_g2(i);
+  lora_ref.f0 = frequency0; lora_ref.f1 = frequency1; lora_ref.points = sweep_points;
+  lora_ref.f_res = m->f_res; lora_ref.swr = m->swr;
+  lora_ref.bw = (m->bw && !(m->bw & 6)) ? m->f_hi - m->f_lo : 0.0f;
+  lora_ref.valid = true;
+  request_to_redraw(REDRAW_PLOT | REDRAW_FREQUENCY);
+  return true;
+}
+
+void lora_ref_clear(void) {
+  lora_ref.valid = false;
+  request_to_redraw(REDRAW_PLOT | REDRAW_AREA | REDRAW_FREQUENCY);
+}
+
+// plot_into_index(): REF curve on the SWR trace scale in the stored trace slot
+static void lora_ref_into_index(void) {
+#if STORED_TRACES > 0
+  bool show = lora_screen_on && lora_ref_here() && trace[0].enabled && trace[0].type == TRC_SWR;
+  if (!show) {
+    if (lora_ref.shown) {enabled_store_trace&= ~1; lora_ref.shown = false; request_to_redraw(REDRAW_AREA);}
+    return;
+  }
+  index_t *index = trace_index[TRACES_MAX];
+  float dscale = GRIDY / get_trace_scale(0);
+  float refpos = HEIGHT - get_trace_refpos(0) * GRIDY + 0.5f + dscale;
+  uint32_t dx = ((WIDTH)<<16) / (sweep_points-1), x = (CELLOFFSETX<<16) + 0x8000;
+  for (int i = 0; i < sweep_points; i++, x+= dx) {
+    float g = vna_sqrtf(lora_ref.g2[i]);
+    int y = 0;
+    if (g < 0.999f) {
+      y = refpos - (1.0f + g) / (1.0f - g) * dscale;
+      if (y < 0) y = 0; else if (y > HEIGHT) y = HEIGHT;
+    }
+    mark_set_index(index, i, (uint16_t)(x>>16), y);
+  }
+  stored_traces_points[0] = sweep_points;
+  enabled_store_trace|= 1;
+  lora_ref.shown = true;
+#endif
+}
+
+//=====================================================================================================
+// Toast: 1 s message over the plot (profile screen)
+//=====================================================================================================
+#define LORA_TOAST_W 260
+#define LORA_TOAST_H (FONT_STR_HEIGHT + 10)
+#define LORA_TOAST_X (CELLOFFSETX + (WIDTH - LORA_TOAST_W) / 2)
+#define LORA_TOAST_Y 44
+static struct {char text[32]; systime_t start; bool on;} lora_toast_s LORA_CCM;
+
+static void lora_toast_invalidate(void) {
+  invalidate_rect(LORA_TOAST_X, LORA_TOAST_Y, LORA_TOAST_X + LORA_TOAST_W, LORA_TOAST_Y + LORA_TOAST_H);
+}
+
+void lora_toast(const char *text) {
+  strncpy(lora_toast_s.text, text, sizeof(lora_toast_s.text) - 1);
+  lora_toast_s.start = chVTGetSystemTimeX();
+  lora_toast_s.on = true;
+  lora_toast_invalidate();
+  request_to_redraw(REDRAW_CELLS);
+}
+
+static void lora_cell_toast(int x0, int y0) {
+  if (!lora_toast_s.on) return;
+  int x = LORA_TOAST_X - x0, y = LORA_TOAST_Y - y0;
+  if (x >= CELLWIDTH || x + LORA_TOAST_W <= 0 || y >= CELLHEIGHT || y + LORA_TOAST_H <= 0) return;
+  lora_cell_fill(x, y, LORA_TOAST_W, LORA_TOAST_H, GET_PALETTE_COLOR(LCD_FG_COLOR));
+  lora_cell_fill(x + 2, y + 2, LORA_TOAST_W - 4, LORA_TOAST_H - 4, GET_PALETTE_COLOR(LCD_MENU_COLOR));
+  lcd_set_foreground(LCD_MENU_TEXT_COLOR);
+  cell_text_shadow = false;
+  cell_printf(x + (LORA_TOAST_W - lora_str_width(lora_toast_s.text)) / 2, y + 5, "%s", lora_toast_s.text);
+  cell_text_shadow = true;
+}
+
+//=====================================================================================================
+// TUNE: full screen big digits (narrow 101 point sweep set by the caller)
+//=====================================================================================================
+static struct {lora_tune_t p; bool on; uint8_t skip;} lora_tune_s LORA_CCM;
+
+void lora_tune_start(const lora_tune_t *t) {
+  lora_tune_s.p = *t;
+  lora_tune_s.on = true;
+  lora_tune_s.skip = 1;                  // first completed sweep may be the old range
+  request_to_redraw(REDRAW_CLRSCR);
+}
+
+void lora_tune_stop(void) {
+  lora_tune_s.on = false;
+  request_to_redraw(REDRAW_CLRSCR | REDRAW_AREA | REDRAW_FREQUENCY | REDRAW_CAL_STATUS | REDRAW_BATTERY);
+}
+
+bool lora_tune_active(void) {return lora_tune_s.on;}
+
+// Scaled text width; '.' is drawn as a square (the bold font dot is a small cross, a '+' when scaled)
+static int lora_text_w(const char *s, int size) {
+  int w = 0;
+  for (; *s; s++) w+= (*s == '.' && size > 1) ? 3 * size : FONT_GET_WIDTH((uint8_t)*s) * size;
+  return w;
+}
+
+// Text with scaled font, x < 0: centred
+static int lora_big(int x, int y, const char *s, int size, uint16_t fg_idx) {
+  if (x < 0) x = (LCD_WIDTH - lora_text_w(s, size)) / 2;
+  lcd_set_colors(fg_idx, LCD_BG_COLOR);
+  for (; *s; s++) {
+    if (*s == '.' && size > 1) {
+      pixel_t bg = background_color;
+      background_color = foreground_color;
+      lcd_fill(x + size / 2, y + 7 * size + size / 2, 2 * size, 2 * size);
+      background_color = bg;
+      x+= 3 * size;
+    } else
+      x+= lcd_drawchar_size(*s, x, y, size);
+  }
+  return x;
+}
+
+// Tune results from the current sweep
+typedef struct {float f_res, swr_res, g2_t, swr_t; bool ok;} lora_tune_res_t;   // ok: dip inside the range
+static lora_tune_res_t lora_tune_calc(void) {
+  lora_tune_res_t r;
+  int n = sweep_points, x = lora_min_index();
+  float y = lora_g2(x), d = 0.0f;
+  if (x > 0 && x < n - 1) {
+    float y1 = lora_g2(x-1), y3 = lora_g2(x+1), den = y1 - 2.0f * y + y3;
+    if (den > 0.0f) d = 0.5f * (y1 - y3) / den;
+    if (d > 0.5f) d = 0.5f; else if (d < -0.5f) d = -0.5f;
+  }
+  r.f_res   = (float)getFrequency(x) + d * (float)getFrequencyStep();
+  r.swr_res = swr(x, measured[0][x]);
+  r.ok = x > 0 && x < n - 1 && lora_dip_side(x, -1) && lora_dip_side(x, 1);
+  float fi = ((float)lora_tune_s.p.target - (float)frequency0) / (float)getFrequencyStep();
+  int i0 = (int)fi;
+  if (i0 < 0) i0 = 0; else if (i0 > n - 2) i0 = n - 2;
+  float k = fi - i0;
+  r.g2_t  = lora_g2(i0) + k * (lora_g2(i0 + 1) - lora_g2(i0));
+  float g = vna_sqrtf(r.g2_t);
+  r.swr_t = g < 0.999f ? (1.0f + g) / (1.0f - g) : 999.0f;
+  if (r.g2_t > 0.999f) r.g2_t = 0.999f;           // uncalibrated / no antenna: keep RL/ML sane
+  return r;
+}
+
+static void lora_tune_static(void) {
+  lcd_set_colors(LCD_FG_COLOR, LCD_BG_COLOR);
+  lcd_clear_screen();
+  char buf[48];
+  plot_printf(buf, sizeof(buf), "TUNE  %s  target %.3f MHz", lora_tune_s.p.title, (float)lora_tune_s.p.target * 1e-6f);
+  lora_big(8, 6, buf, 1, LCD_FG_COLOR);
+  lora_big(LCD_WIDTH - 8 - lora_text_w("tap or push to exit", 1), 6, "tap or push to exit", 1, LCD_TRACE_1_COLOR);
+  if (lora_tune_s.p.cal == LORA_CAL_NONE) lora_big(-1, 24, "NOT CALIBRATED", 1, LCD_LOW_BAT_COLOR);
+  lora_big(8, 26, "RESONANCE", 1, LCD_GRID_COLOR);
+  lora_big(-1, 110, "measuring...", 2, LCD_GRID_COLOR);
+}
+
+static void lora_tune_draw(void) {
+  char buf[48];
+  lora_tune_res_t r = lora_tune_calc();
+  float ft = (float)lora_tune_s.p.target;
+  float pct = (r.f_res - ft) / ft * 100.0f;
+  // Big resonance frequency
+  lcd_set_colors(LCD_FG_COLOR, LCD_BG_COLOR);
+  lcd_fill(0, 40, LCD_WIDTH, 58);
+  if (r.ok) plot_printf(buf, sizeof(buf), "%.2f", r.f_res * 1e-6f);
+  else      plot_printf(buf, sizeof(buf), "---.--");
+  int w = lora_text_w(buf, 5) + 10 + lora_text_w("MHz", 2);
+  int x = lora_big((LCD_WIDTH - w) / 2, 40, buf, 5, LCD_FG_COLOR);
+  lora_big(x + 10, 40 + 5 * FONT_GET_HEIGHT - 2 * FONT_GET_HEIGHT, "MHz", 2, LCD_FG_COLOR);
+  // Direction: resonance below target = antenna too long = shorten
+  lcd_fill(0, 100, LCD_WIDTH, 3 * FONT_GET_HEIGHT + FONT_STR_HEIGHT + 6);
+  float apct = vna_fabsf(pct);
+  uint16_t c = apct < 0.3f ? LCD_NORMAL_BAT_COLOR : apct < 2.0f ? LCD_TRACE_1_COLOR : LCD_LOW_BAT_COLOR;
+  if (!r.ok) {c = LCD_LOW_BAT_COLOR; plot_printf(buf, sizeof(buf), "NO DIP IN RANGE");}
+  else if (apct < 0.3f) plot_printf(buf, sizeof(buf), "ON TARGET");
+  else plot_printf(buf, sizeof(buf), pct < 0.0f ? "<< SHORTEN %.1f %%" : "LENGTHEN %.1f %% >>", apct);
+  lora_big(-1, 102, buf, 3, c);
+  if (r.ok)
+    plot_printf(buf, sizeof(buf), "resonance %.2f MHz %s target (%+.2f %%)", vna_fabsf(r.f_res - ft) * 1e-6f,
+                pct < 0.0f ? "below" : "above", pct);
+  else
+    plot_printf(buf, sizeof(buf), "antenna far off tune, missing or not calibrated");
+  lora_big(-1, 102 + 3 * FONT_GET_HEIGHT + 4, buf, 1, LCD_GRID_COLOR);
+  // SWR / RL / ML at the target frequency
+  int y = 158;
+  lcd_set_colors(LCD_FG_COLOR, LCD_BG_COLOR);
+  lcd_fill(0, y, LCD_WIDTH, 4 * FONT_GET_HEIGHT + FONT_STR_HEIGHT + 4);
+  plot_printf(buf, sizeof(buf), "SWR at %.3f MHz", ft * 1e-6f);
+  lora_big(8, y, buf, 1, LCD_GRID_COLOR);
+  if (r.swr_t < 99.5f) plot_printf(buf, sizeof(buf), "%.2f", r.swr_t); else plot_printf(buf, sizeof(buf), "99+");
+  c = r.swr_t <= 1.5f ? LCD_NORMAL_BAT_COLOR : r.swr_t <= 2.0f ? LCD_TRACE_1_COLOR : LCD_LOW_BAT_COLOR;
+  lora_big(8, y + FONT_STR_HEIGHT + 2, buf, 4, c);
+  plot_printf(buf, sizeof(buf), "RL %.1f dB", -vna_log10f_x_10(r.g2_t));
+  lora_big(240, y + FONT_STR_HEIGHT + 2, buf, 2, LCD_FG_COLOR);
+  plot_printf(buf, sizeof(buf), "ML %.2f dB", lora_ml(r.g2_t));
+  lora_big(240, y + FONT_STR_HEIGHT + 4 + 2 * FONT_GET_HEIGHT, buf, 2, LCD_FG_COLOR);
+  // REF: trim / detune feedback
+  y = 222;
+  lcd_set_colors(LCD_FG_COLOR, LCD_BG_COLOR);
+  lcd_fill(0, y, LCD_WIDTH, 2 * FONT_GET_HEIGHT);
+  if (lora_ref.valid && lora_ref.f0 == frequency0 && lora_ref.f1 == frequency1) {   // same band range
+    plot_printf(buf, sizeof(buf), "REF %.2f > %.2f (%+.2f MHz)", lora_ref.f_res * 1e-6f, r.f_res * 1e-6f,
+                (r.f_res - lora_ref.f_res) * 1e-6f);
+    lora_big(-1, y, buf, 2, LCD_TRACE_2_COLOR);
+  }
+  // SWR strip: SWR 1 (bottom) .. 3 (top), band shaded, target line, SWR 2 dashed
+  const int sx = 10, sw = LCD_WIDTH - 20, sy = 250, sh = LCD_HEIGHT - 4 - sy;
+  lcd_set_background(LCD_BG_COLOR);
+  lcd_fill(sx, sy, sw, sh);
+  float k = (float)sw / (float)(frequency1 - frequency0);
+  int bx0 = sx + ((float)lora_tune_s.p.band_lo - (float)frequency0) * k;
+  int bx1 = sx + ((float)lora_tune_s.p.band_hi - (float)frequency0) * k;
+  if (bx1 > bx0) {background_color = LORA_SHADE_COLOR; lcd_fill(bx0, sy, bx1 - bx0 + 1, sh);}
+  lcd_set_foreground(LCD_GRID_COLOR);
+  lcd_line(sx, sy, sx + sw, sy); lcd_line(sx, sy + sh, sx + sw, sy + sh);
+  foreground_color = LORA_GUIDE20_COLOR;
+  for (int xx = sx; xx < sx + sw; xx+= 8) lcd_line(xx, sy + sh / 2, xx + 3, sy + sh / 2);
+  int tx = sx + (ft - (float)frequency0) * k;
+  lcd_set_foreground(LCD_FG_COLOR);
+  for (int yy = sy; yy < sy + sh; yy+= 6) lcd_line(tx, yy, tx, yy + 2);
+  lcd_set_foreground(LCD_TRACE_1_COLOR);
+  int px = 0, py = 0;
+  for (int i = 0; i < sweep_points; i++) {
+    float v = swr(i, measured[0][i]);
+    int yy = sy + sh - (int)((v - 1.0f) * 0.5f * sh);
+    if (!(v < 3.0f)) yy = sy;
+    int xx = sx + i * sw / (sweep_points - 1);
+    if (i) {lcd_line(px, py, xx, yy); lcd_line(px, py - 1, xx, yy - 1);}
+    px = xx; py = yy;
+  }
+  lcd_set_colors(LCD_GRID_COLOR, LCD_BG_COLOR);
+  lcd_drawstring(sx + 2, sy + 2, "SWR 3");
+  lcd_drawstring(sx + 2, sy + sh - FONT_STR_HEIGHT, "1");
+}
+
+// draw_all() hook: full screen modes draw instead of the plot; also toast expiry
+bool lora_fullscreen_draw(void) {
+  if (lora_toast_s.on && chVTTimeElapsedSinceX(lora_toast_s.start) > MS2ST(1000)) {
+    lora_toast_s.on = false;
+    lora_toast_invalidate();
+    request_to_redraw(REDRAW_CELLS);
+  }
+  if (!lora_tune_s.on) return false;
+  if (redraw_request & REDRAW_CLRSCR) lora_tune_static();
+  if (redraw_request & REDRAW_PLOT) {
+    if (lora_tune_s.skip) lora_tune_s.skip--;
+    else lora_tune_draw();
+  }
+  return true;
+}
+
+//=====================================================================================================
+// Shell: profile info / ref / tune lines
+//=====================================================================================================
+int shell_printf(const char *fmt, ...);
+void lora_info_print(uint8_t mask) {
+  const lora_measure_t *m = lora_meas;
+  if (mask & LORA_PRINT_INFO) {
+  shell_printf("res %u %.3f %.2f %.3f %.2f %.2f\r\n", (uint32_t)m->f_res, m->swr, m->rl, m->ml, m->r, m->x);
+  bool bw_ok = m->bw && !(m->bw & 6);
+  shell_printf("bw %u %d\r\n", m->bw ? (uint32_t)(m->f_hi - m->f_lo) : 0, (m->bw & 6) ? 1 : 0);
+  shell_printf("q %.1f\r\n", bw_ok ? m->f_res / (m->f_hi - m->f_lo) : 0.0f);
+  shell_printf("worst %.3f\r\n", m->worst);
+  shell_printf("flag %s\r\n", lora_flag_names[m->flag]);
+  for (int k = 0; k < m->ndip; k++)
+    shell_printf("dip %u %.3f %u\r\n", (uint32_t)m->dip_f[k], m->dip_swr[k], lora_near_band(m->dip_f[k]));
+  }
+  if (mask & LORA_PRINT_REF)
+  shell_printf("ref %d %u %.3f %u\r\n", lora_ref.valid ? 1 : 0, (uint32_t)lora_ref.f_res, lora_ref.swr, (uint32_t)lora_ref.bw);
+  if (!(mask & LORA_PRINT_TUNE)) return;
+  if (lora_tune_s.on && lora_tune_s.skip)
+    shell_printf("tune 1 %u 0 0 0\r\n", lora_tune_s.p.target);
+  else if (lora_tune_s.on) {
+    lora_tune_res_t r = lora_tune_calc();
+    float ft = (float)lora_tune_s.p.target;
+    shell_printf("tune 1 %u %u %.3f %.2f\r\n", lora_tune_s.p.target, (uint32_t)r.f_res, r.swr_t, (r.f_res - ft) / ft * 100.0f);
+  } else
+    shell_printf("tune 0\r\n");
 }
 
 // Info block corner score: trace points (and marker plates, heavy) under the block
@@ -471,6 +845,9 @@ static void prepare_lora_info(uint8_t type, uint8_t update_mask) {
         float v = swr(i, measured[0][i]);
         if (!(v <= m->worst)) m->worst = v;     // NaN/INF -> worst
       }
+    m->ml = lora_ml(y);
+    lora_sanity(m);
+    lora_dips(m);
   }
   if (!lora_screen_on) {
     invalidate_rect(STR_MEASURE_X                        , STR_MEASURE_Y,
@@ -503,6 +880,8 @@ static void prepare_lora_info(uint8_t type, uint8_t update_mask) {
   int lines = 6;                                     // chips, M1/res, swr/rl, z, bw, legend
   if (!(props_mode & TD_MARKER_TRACK)) lines++;      // M1 FREE: M1 readout + resonance line
   if (get_electrical_delay() != 0.0f) lines++;
+  if (lp.s.nband > 1 && m->ndip > 1) lines+= m->ndip - 1; // WIDE/SURVEY: dips instead of the BW line
+  if (lora_ref_here()) lines++;                      // vs REF
   int bh = lines * LORA_LINE_H + 3;
   if (bh != lp.box_h || lines != lp.lines) {lora_invalidate_box(); lp.box_h = bh; lp.lines = lines;}
   if ((update_mask & MEASURE_UPD_SWEEP) && !lora_box_cfg_x) {
@@ -555,9 +934,9 @@ static void draw_lora_info(int xp, int yp) {
       foreground_color = lora_swr_color(lp.lbl_swr[k]);
       cell_printf(lp.lbl_x[k] - x0, LORA_LBL_Y + lp.lbl_row[k] * FONT_STR_HEIGHT - y0, "%s", lp.lbl[k]);
     }
-  // Info block (skip cells outside)
+  // Info block (skip cells outside), toast on top
   int bx = lp.box_x - x0, by = lp.box_y - y0;
-  if (bx >= CELLWIDTH || bx + LORA_BOX_W <= 0 || by >= CELLHEIGHT || by + lp.box_h <= 0) return;
+  if (bx >= CELLWIDTH || bx + LORA_BOX_W <= 0 || by >= CELLHEIGHT || by + lp.box_h <= 0) {lora_cell_toast(x0, y0); return;}
   lora_cell_fill(bx, by, LORA_BOX_W, lp.box_h, GET_PALETTE_COLOR(LCD_BG_COLOR));
   pixel_t frame = GET_PALETTE_COLOR(LCD_GRID_COLOR);
   lora_cell_fill(bx, by, LORA_BOX_W, 1, frame);
@@ -568,7 +947,10 @@ static void draw_lora_info(int xp, int yp) {
   // 1: title, pass/fail chip (worst SWR in band), cal chip
   lcd_set_foreground(LCD_FG_COLOR);
   x+= lora_print(x, y, lp.s.title) + 4;
-  if (m->worst >= 0.0f && lp.s.cal != LORA_CAL_NONE) {
+  if (m->flag != LORA_FLAG_OK) {                     // antenna sanity first
+    static const char *ft[] = {"", "NO ANT/OPEN?", "SHORT?", "LOSSY?"};
+    x+= lora_chip(x, y, ft[m->flag], GET_PALETTE_COLOR(m->flag == LORA_FLAG_LOSSY ? LCD_TRACE_1_COLOR : LCD_LOW_BAT_COLOR)) + 3;
+  } else if (m->worst >= 0.0f && lp.s.cal != LORA_CAL_NONE) {
     char sv[8];
     lora_fmt_swr(sv, sizeof(sv), m->worst);
     plot_printf(buf, sizeof(buf), "%s worst %s", m->worst <= 1.5f ? "OK" : m->worst <= 2.0f ? "~OK" : "BAD", sv);
@@ -604,7 +986,7 @@ static void draw_lora_info(int xp, int yp) {
   foreground_color = lora_swr_color(v_swr);
   w+= lora_print(x + w, y, buf);
   lcd_set_foreground(LCD_FG_COLOR);
-  cell_printf(x + w, y, "  RL %.1f" S_dB, v_rl);
+  cell_printf(x + w, y, "  RL %.1f" S_dB "  ML %.2f" S_dB, v_rl, track ? m->ml : lora_ml(lora_g2(i)));
   y+= LORA_LINE_H;
   // 4: impedance at M1
   if (track) cell_printf(x, y, "Z %.1f%+j.1f" S_OHM, m->r, m->x);
@@ -620,7 +1002,15 @@ static void draw_lora_info(int xp, int yp) {
       cell_printf(x, y, "Res %.5F" S_Hz " SWR %s", m->f_res, buf);
     y+= LORA_LINE_H;
   }
-  // 5: SWR<=2 bandwidth and Q = f/BW
+  // 5: WIDE/SURVEY: dips with the nearest LoRa band, else SWR<=2 bandwidth and Q = f/BW
+  if (lp.s.nband > 1) {
+    if (!m->ndip) {cell_printf(x, y, "No dip below SWR 3"); y+= LORA_LINE_H;}
+    for (int k = 0; k < m->ndip; k++, y+= LORA_LINE_H) {
+      lora_fmt_swr(buf, sizeof(buf), m->dip_swr[k]);
+      uint32_t b = lora_near_band(m->dip_f[k]);
+      cell_printf(x, y, "Dip %.5F" S_Hz " %s (%u%+.3F" S_Hz ")", m->dip_f[k], buf, b, m->dip_f[k] - b * 1e6f);
+    }
+  } else {
   if (!m->bw)
     cell_printf(x, y, "BW(SWR<2) none");
   else if (m->bw & 6)
@@ -628,6 +1018,14 @@ static void draw_lora_info(int xp, int yp) {
   else
     cell_printf(x, y, "BW(SWR<2) %.3F" S_Hz "  Q %.1f", m->f_hi - m->f_lo, m->f_res / (m->f_hi - m->f_lo));
   y+= LORA_LINE_H;
+  }
+  // vs REF: resonance shift and SWR change since REF
+  if (lora_ref_here()) {
+    lcd_set_foreground(LCD_TRACE_2_COLOR);
+    cell_printf(x, y, "vs REF " S_DELTA "f %+.3F" S_Hz " " S_DELTA "SWR %+.2f", m->f_res - lora_ref.f_res, m->swr - lora_ref.swr);
+    lcd_set_foreground(LCD_MEASURE_COLOR);
+    y+= LORA_LINE_H;
+  }
   float ed = get_electrical_delay();
   if (ed != 0.0f) {
     cell_printf(x, y, "Edelay %F" S_SECOND, ed);
@@ -648,5 +1046,6 @@ static void draw_lora_info(int xp, int yp) {
     lcd_set_foreground(LCD_TRACE_1_COLOR + t);
     x+= lora_print(x, y, buf) + FONT_WIDTH;
   }
+  lora_cell_toast(x0, y0);
 }
 #endif // __VNA_LORA_PROFILES__

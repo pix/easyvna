@@ -1214,6 +1214,9 @@ static void plot_into_index(void) {
   for (int t = 0; t < TRACES_MAX; t++)
     if (trace[t].enabled)
       trace_into_index(t);
+#ifdef __VNA_LORA_PROFILES__
+  lora_ref_into_index();
+#endif
 //  STOP_PROFILE;
   // Marker track on data update
   if (props_mode & TD_MARKER_TRACK)
@@ -1498,6 +1501,9 @@ static void draw_cell(int x0, int y0) {
     if (t < TRACES_MAX && ((1 << trace[t].type) & RECTANGULAR_GRID_MASK))
       search_index_range_x(x0, x0 + w, index, &i0, &i1);
     c = GET_PALETTE_COLOR(LCD_TRACE_1_COLOR + t);
+#ifdef __VNA_LORA_PROFILES__
+    if (t >= TRACES_MAX && lora_screen_on) c = LORA_REF_COLOR;   // REF curve: dim grey
+#endif
     for (int i = i0; i < i1; i++) {
       int x1 = index[i].x - x0;
       int y1 = index[i].y - y0;
@@ -1660,6 +1666,10 @@ void redraw_marker(int8_t marker) {
 }
 
 static void draw_frequencies(void) {
+#ifdef __VNA_LORA_PROFILES__
+  lora_screen_update();
+  if (lora_screen_on) {lora_draw_bar(); return;}   // profile screen: action bar instead
+#endif
   char lm0 = lever_mode == LM_FREQ_0 ? S_SARROW[0] : ' ';
   char lm1 = lever_mode == LM_FREQ_1 ? S_SARROW[0] : ' ';
   // Draw frequency string
@@ -1788,6 +1798,9 @@ static void draw_battery_status(void) {
 //            Draw all request
 //**************************************************************************************
 void draw_all(void) {
+#ifdef __VNA_LORA_PROFILES__
+  if (lora_fullscreen_draw()) {redraw_request = 0; return;}  // TUNE full screen
+#endif
 #ifdef __USE_BACKUP__
   if (redraw_request & REDRAW_BACKUP)
     update_backup_data();

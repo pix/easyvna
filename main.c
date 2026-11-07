@@ -226,6 +226,15 @@ static void measurementDataSmooth(uint16_t ch_mask){
 #endif
 
 static THD_WORKING_AREA(waThread1, 1024);
+// Run Shell commands queued for the sweep thread (also called from modal UI screens)
+void shell_poll_pending(void) {
+  while (shell_function) {
+    shell_function(shell_nargs - 1, &shell_args[1]);
+    shell_function = 0;
+    osalThreadDequeueNextI(&shell_thread, MSG_OK);
+  }
+}
+
 static THD_FUNCTION(Thread1, arg)
 {
   (void)arg;
@@ -254,11 +263,7 @@ static THD_FUNCTION(Thread1, arg)
       __WFI();
     }
     // Run Shell command in sweep thread
-    while (shell_function) {
-      shell_function(shell_nargs - 1, &shell_args[1]);
-      shell_function = 0;
-      osalThreadDequeueNextI(&shell_thread, MSG_OK);
-    }
+    shell_poll_pending();
     // Process UI inputs
     sweep_mode|= SWEEP_UI_MODE;
     ui_process();

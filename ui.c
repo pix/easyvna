@@ -3517,7 +3517,7 @@ static void ui_mode_normal(void) {
 #define MARKER_SPEEDUP  3
 static void lever_move_marker(uint16_t status) {
 #ifdef __VNA_LORA_PROFILES__
-  lora_jog_marker();   // profile screen: jog moves M1 only, switches M1 to FREE
+  if (lora_jog_marker()) return;   // profile screen: jog moves M1 only (-> FREE), TUNE: nothing
 #endif
   if (active_marker == MARKER_INVALID || !markers[active_marker].enabled) return;
   uint16_t step = 1<<MARKER_SPEEDUP;
@@ -3723,7 +3723,7 @@ static bool touch_made_screenshot(int touch_x, int touch_y) {
 
 static void ui_normal_touch(int touch_x, int touch_y) {
 #ifdef __VNA_LORA_PROFILES__
-  if (lora_touch_info(touch_x, touch_y)) return;         // Profile screen: drag / tap info block
+  if (lora_touch(touch_x, touch_y)) return;              // Profile screen: TUNE, action bar, info block
 #endif
   if (touch_pickup_marker(touch_x, touch_y)) return;     // Try drag marker
 #ifdef __USE_SD_CARD__
