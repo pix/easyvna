@@ -693,12 +693,309 @@ static void lora_tune_draw(void) {
   lcd_drawstring(sx + 2, sy + sh - FONT_STR_HEIGHT, "1");
 }
 
+//=====================================================================================================
+// HOLD: min/max envelope of |G| (= SWR and |S11|) per point since HOLD was switched on, drawn as a
+// shaded band on the SWR scale, best SWR so far in the info block (CCM, RAM only)
+//=====================================================================================================
+#define LORA_HOLD_COLOR RGB565(96, 88, 0)
+typedef struct {
+  bool     on;
+  freq_t   f0, f1;
+  uint16_t points, sweeps;
+  float    best_swr, best_f;
+  uint16_t qmin[SWEEP_POINTS_MAX], qmax[SWEEP_POINTS_MAX];   // |G|^2 * 65535
+  uint16_t ytop[SWEEP_POINTS_MAX], ybot[SWEEP_POINTS_MAX];   // pixels on the SWR trace scale
+} lora_hold_t;
+static lora_hold_t lora_hold LORA_CCM;
+
+static void lora_hold_reset(void) {
+  lora_hold.f0 = frequency0; lora_hold.f1 = frequency1; lora_hold.points = sweep_points;
+  lora_hold.sweeps = 0; lora_hold.best_swr = 1e9f; lora_hold.best_f = 0.0f;
+  for (int i = 0; i < SWEEP_POINTS_MAX; i++) {
+    lora_hold.qmin[i] = 0xFFFF; lora_hold.qmax[i] = 0;
+    lora_hold.ytop[i] = lora_hold.ybot[i] = 0;
+  }
+}
+
+void lora_hold_set(bool on) {
+  if (on) lora_hold_reset();                       // re-enable clears the envelope
+  lora_hold.on = on;
+  request_to_redraw(REDRAW_AREA | REDRAW_FREQUENCY);
+}
+bool lora_hold_active(void) {return lora_hold.on;}
+
+// |G|^2 -> y on the SWR trace scale (0 = top)
+static int lora_swr_y(float g2) {
+  float g = vna_sqrtf(g2);
+  if (g >= 0.999f) return 0;
+  float dscale = GRIDY / get_trace_scale(0);
+  int y = HEIGHT - get_trace_refpos(0) * GRIDY + 0.5f + dscale - (1.0f + g) / (1.0f - g) * dscale;
+  return y < 0 ? 0 : y > HEIGHT ? HEIGHT : y;
+}
+
+// plot_into_index(): add the sweep to the envelope, mark changed columns for redraw
+static void lora_hold_update(void) {
+  if (!lora_hold.on || !lora_screen_on) return;
+  if (lora_hold.f0 != frequency0 || lora_hold.f1 != frequency1 || lora_hold.points != sweep_points) {
+    lora_hold_reset();
+    request_to_redraw(REDRAW_AREA);
+  }
+  bool draw = trace[0].enabled && trace[0].type == TRC_SWR;
+  for (int i = 0; i < sweep_points; i++) {
+    float g2 = lora_g2(i);
+    uint16_t q = g2 >= 1.0f ? 0xFFFF : (uint16_t)(g2 * 65535.0f);
+    if (q < lora_hold.qmin[i]) {
+      lora_hold.qmin[i] = q;
+      float v = swr(i, measured[0][i]);
+      if (v < lora_hold.best_swr) {lora_hold.best_swr = v; lora_hold.best_f = (float)getFrequency(i);}
+    }
+    if (q > lora_hold.qmax[i]) lora_hold.qmax[i] = q;
+    if (!draw) continue;
+    uint16_t yt = lora_swr_y(lora_hold.qmax[i] / 65535.0f), yb = lora_swr_y(lora_hold.qmin[i] / 65535.0f);
+    if (yt != lora_hold.ytop[i] || yb != lora_hold.ybot[i]) {
+      int x = CELLOFFSETX + (i * WIDTH + (sweep_points - 1) / 2) / (sweep_points - 1);
+      int a = yt < lora_hold.ytop[i] ? yt : lora_hold.ytop[i];
+      int b = yb > lora_hold.ybot[i] ? yb : lora_hold.ybot[i];
+      mark_line(x, a, x + 1, b);
+      lora_hold.ytop[i] = yt; lora_hold.ybot[i] = yb;
+    }
+  }
+  lora_hold.sweeps++;
+}
+
+// draw_cell(): shaded envelope (after band shading, before grid and traces)
+static void lora_cell_hold(int x0, int y0, int w, int h) {
+  if (!lora_hold.on || !lora_screen_on || lora_hold.sweeps == 0 || lora_hold.points != sweep_points
+      || !trace[0].enabled || trace[0].type != TRC_SWR) return;
+  int n = sweep_points;
+  int i0 = (x0 - CELLOFFSETX - 2) * (n - 1) / WIDTH, i1 = (x0 + w - CELLOFFSETX + 1) * (n - 1) / WIDTH + 1;
+  if (i0 < 0) i0 = 0;
+  if (i1 > n - 1) i1 = n - 1;
+  for (int i = i0; i <= i1; i++) {
+    int x = CELLOFFSETX + (i * WIDTH + (n - 1) / 2) / (n - 1) - x0;
+    int ya = lora_hold.ytop[i] - y0, yb = lora_hold.ybot[i] - y0 + 1;
+    if (ya < 0) ya = 0;
+    if (yb > h) yb = h;
+    for (int xx = x; xx <= x + 1; xx++) {
+      if ((uint32_t)xx >= (uint32_t)w) continue;
+      for (int y = ya; y < yb; y++) cell_buffer[y * CELLWIDTH + xx] = LORA_HOLD_COLOR;
+    }
+  }
+}
+
+//=====================================================================================================
+// S21 COMPARE: full screen, port 1 = fixed REF antenna, port 2 = antenna under test.
+// Store antenna A (average of 3 sweeps), then the live in-band average of antenna B minus A.
+// Relative only: no THRU calibration needed, keep cables and positions fixed.
+//=====================================================================================================
+#define LORA_CMP_POINTS  101
+#define LORA_CMP_STORE_N 3
+enum {LORA_CMP_OFF = 0, LORA_CMP_ASK_A, LORA_CMP_STORING, LORA_CMP_LIVE};
+// Touch areas
+#define LORA_CMP_BTN_W   150
+#define LORA_CMP_BTN_H   44
+#define LORA_CMP_BTN_Y   (LCD_HEIGHT - LORA_CMP_BTN_H - 6)
+#define LORA_CMP_EXIT_X  (LCD_WIDTH - LORA_CMP_BTN_W - 8)
+#define LORA_CMP_NEWA_X  8
+typedef struct {
+  lora_tune_t p;                     // title, band centre, band edges
+  uint8_t state, count, skip;
+  bool    a_valid, b_init;
+  freq_t  a_f0, a_f1;
+  float   a[LORA_CMP_POINTS], b[LORA_CMP_POINTS];   // |S21| dB
+} lora_cmp_t;
+static lora_cmp_t lora_cmp LORA_CCM;
+
+static float lora_s21_db(int i) {
+  float p = get_l(measured[1][i][0], measured[1][i][1]);
+  return p > 1e-12f ? vna_log10f_x_10(p) : -120.0f;
+}
+
+void lora_cmp_start(const lora_tune_t *t) {
+  lora_cmp.p = *t;
+  lora_cmp.skip = 1;
+  lora_cmp.b_init = false;
+  // A stored before over the same range: straight to the live comparison
+  lora_cmp.state = (lora_cmp.a_valid && lora_cmp.a_f0 == frequency0 && lora_cmp.a_f1 == frequency1) ? LORA_CMP_LIVE : LORA_CMP_ASK_A;
+  request_to_redraw(REDRAW_CLRSCR);
+}
+void lora_cmp_stop(void) {
+  lora_cmp.state = LORA_CMP_OFF;
+  request_to_redraw(REDRAW_CLRSCR | REDRAW_AREA | REDRAW_FREQUENCY | REDRAW_CAL_STATUS | REDRAW_BATTERY);
+}
+bool lora_cmp_active(void) {return lora_cmp.state != LORA_CMP_OFF;}
+
+void lora_cmp_store_a(void) {
+  if (!lora_cmp_active()) return;
+  for (int i = 0; i < LORA_CMP_POINTS; i++) lora_cmp.a[i] = 0.0f;
+  lora_cmp.count = 0;
+  lora_cmp.skip = 1;                                 // next complete sweep
+  lora_cmp.state = LORA_CMP_STORING;
+  request_to_redraw(REDRAW_CLRSCR);
+}
+void lora_cmp_new_a(void) {
+  lora_cmp.a_valid = false;
+  lora_cmp.state = LORA_CMP_ASK_A;
+  request_to_redraw(REDRAW_CLRSCR);
+}
+
+// Touch action: 0 = exit, 1 = store A, 2 = new A, -1 = nothing
+int lora_cmp_touch(int x, int y) {
+  bool btn = y >= LORA_CMP_BTN_Y - 4;
+  switch (lora_cmp.state) {
+    case LORA_CMP_ASK_A:   return (btn && x >= LORA_CMP_EXIT_X) ? 0 : 1;
+    case LORA_CMP_STORING: return -1;
+    case LORA_CMP_LIVE:    return (btn && x < LORA_CMP_NEWA_X + LORA_CMP_BTN_W) ? 2 : 0;
+  }
+  return 0;
+}
+
+// In-band (band edges) power average of dB values in v (A or B), points of the current sweep
+static float lora_cmp_band_avg(const float *v) {
+  float s = 0.0f; int n = 0;
+  for (int i = 0; i < LORA_CMP_POINTS && i < sweep_points; i++) {
+    freq_t f = getFrequency(i);
+    if (f < lora_cmp.p.band_lo || f > lora_cmp.p.band_hi) continue;
+    s+= vna_expf(v[i] * 0.23025851f); n++;        // 10^(dB/10)
+  }
+  return n ? vna_log10f_x_10(s / n) : -120.0f;
+}
+
+typedef struct {float a, b, d, worst, best; bool ok;} lora_cmp_res_t;
+static lora_cmp_res_t lora_cmp_calc(void) {
+  lora_cmp_res_t r = {0};
+  if (lora_cmp.state != LORA_CMP_LIVE || !lora_cmp.b_init) return r;
+  r.a = lora_cmp_band_avg(lora_cmp.a);
+  r.b = lora_cmp_band_avg(lora_cmp.b);
+  r.d = r.b - r.a;
+  r.worst = 1e9f; r.best = -1e9f;
+  for (int i = 0; i < LORA_CMP_POINTS && i < sweep_points; i++) {
+    freq_t f = getFrequency(i);
+    if (f < lora_cmp.p.band_lo || f > lora_cmp.p.band_hi) continue;
+    float d = lora_cmp.b[i] - lora_cmp.a[i];
+    if (d < r.worst) r.worst = d;
+    if (d > r.best)  r.best  = d;
+  }
+  r.ok = true;
+  return r;
+}
+
+static void lora_cmp_button(int x, const char *text, uint16_t bg) {
+  lcd_set_background(LCD_FG_COLOR);
+  lcd_fill(x, LORA_CMP_BTN_Y, LORA_CMP_BTN_W, LORA_CMP_BTN_H);
+  lcd_set_background(bg);
+  lcd_fill(x + 2, LORA_CMP_BTN_Y + 2, LORA_CMP_BTN_W - 4, LORA_CMP_BTN_H - 4);
+  lcd_set_foreground(LCD_FG_COLOR);
+  lcd_drawstring_size(text, x + (LORA_CMP_BTN_W - lora_text_w(text, 2)) / 2, LORA_CMP_BTN_Y + (LORA_CMP_BTN_H - 2 * FONT_GET_HEIGHT) / 2, 2);
+}
+
+static void lora_cmp_static(void) {
+  char buf[64];
+  lcd_set_colors(LCD_FG_COLOR, LCD_BG_COLOR);
+  lcd_clear_screen();
+  plot_printf(buf, sizeof(buf), "S21 COMPARE  %s  band %.2f-%.2f MHz", lora_cmp.p.title,
+              lora_cmp.p.band_lo * 1e-6f, lora_cmp.p.band_hi * 1e-6f);
+  lora_big(8, 6, buf, 1, LCD_FG_COLOR);
+  lora_big(LCD_WIDTH - 8 - lora_text_w("push to exit", 1), 6, "push to exit", 1, LCD_TRACE_1_COLOR);
+  lora_big(-1, 22, "relative only: no THRU cal needed, keep cables and positions fixed", 1, LCD_GRID_COLOR);
+  if (lora_cmp.state == LORA_CMP_LIVE) {
+    lora_big(8, 40, "Antenna B on port 2 (swap freely)", 1, LCD_FG_COLOR);
+    lora_cmp_button(LORA_CMP_NEWA_X, "NEW A", LCD_GRID_COLOR);
+    lora_big(LORA_CMP_NEWA_X + LORA_CMP_BTN_W + 12, LORA_CMP_BTN_Y + 16, "tap elsewhere to exit", 1, LCD_GRID_COLOR);
+    return;
+  }
+  lora_big(-1, 50, "Port 1: fixed REF antenna (tripod)", 2, LCD_FG_COLOR);
+  lora_big(-1, 80, "Port 2: antenna to test", 2, LCD_FG_COLOR);
+  if (lora_cmp.state == LORA_CMP_ASK_A) {
+    lora_big(-1, 120, "Put antenna A on port 2", 2, LCD_TRACE_1_COLOR);
+    lora_big(-1, 150, "TAP TO STORE A", 4, LCD_TRACE_1_COLOR);
+    lora_cmp_button(LORA_CMP_EXIT_X, "EXIT", LCD_LOW_BAT_COLOR);
+  } else
+    lora_big(-1, 150, "Storing A...", 4, LCD_TRACE_1_COLOR);
+}
+
+static void lora_cmp_draw(void) {
+  char buf[64];
+  if (lora_cmp.state == LORA_CMP_ASK_A) {          // live level, helps to check the setup
+    for (int i = 0; i < LORA_CMP_POINTS; i++) lora_cmp.b[i] = lora_s21_db(i);
+    float l = lora_cmp_band_avg(lora_cmp.b);
+    lcd_set_colors(LCD_FG_COLOR, LCD_BG_COLOR);
+    lcd_fill(0, 200, LCD_WIDTH, 2 * FONT_GET_HEIGHT + FONT_STR_HEIGHT + 4);
+    plot_printf(buf, sizeof(buf), "in-band S21 now: %.1f dB", l);
+    lora_big(-1, 200, buf, 2, l < -70.0f ? LCD_LOW_BAT_COLOR : LCD_FG_COLOR);
+    if (l < -70.0f) lora_big(-1, 200 + 2 * FONT_GET_HEIGHT + 2, "very low: check the port 2 / port 1 antennas and cables", 1, LCD_LOW_BAT_COLOR);
+    return;
+  }
+  if (lora_cmp.state == LORA_CMP_STORING) {
+    for (int i = 0; i < LORA_CMP_POINTS; i++) lora_cmp.a[i]+= lora_s21_db(i);
+    if (++lora_cmp.count >= LORA_CMP_STORE_N) {
+      for (int i = 0; i < LORA_CMP_POINTS; i++) lora_cmp.a[i]/= LORA_CMP_STORE_N;
+      lora_cmp.a_valid = true; lora_cmp.a_f0 = frequency0; lora_cmp.a_f1 = frequency1;
+      lora_cmp.state = LORA_CMP_LIVE; lora_cmp.b_init = false;
+      lora_cmp_static();
+    }
+    return;
+  }
+  // LIVE: smoothed B
+  for (int i = 0; i < LORA_CMP_POINTS; i++) {
+    float v = lora_s21_db(i);
+    lora_cmp.b[i] = lora_cmp.b_init ? 0.6f * lora_cmp.b[i] + 0.4f * v : v;
+  }
+  lora_cmp.b_init = true;
+  lora_cmp_res_t r = lora_cmp_calc();
+  // Big delta
+  lcd_set_colors(LCD_FG_COLOR, LCD_BG_COLOR);
+  lcd_fill(0, 56, LCD_WIDTH, 6 * FONT_GET_HEIGHT + 2 * FONT_GET_HEIGHT + 8);
+  uint16_t c = r.d > 0.5f ? LCD_NORMAL_BAT_COLOR : r.d < -0.5f ? LCD_LOW_BAT_COLOR : LCD_TRACE_1_COLOR;
+  plot_printf(buf, sizeof(buf), "%+.1f dB", r.d);
+  lora_big(-1, 56, buf, 6, c);
+  lora_big(-1, 56 + 6 * FONT_GET_HEIGHT + 4, r.d > 0.5f ? "B better than A" : r.d < -0.5f ? "B worse than A" : "B same as A (0.5 dB)", 2, c);
+  // Levels and in-band spread
+  int y = 56 + 8 * FONT_GET_HEIGHT + 12;
+  lcd_set_colors(LCD_FG_COLOR, LCD_BG_COLOR);
+  lcd_fill(0, y, LCD_WIDTH, FONT_STR_HEIGHT);
+  plot_printf(buf, sizeof(buf), "A %.1f dB   B %.1f dB   in band: worst %+.1f  best %+.1f dB", r.a, r.b, r.worst, r.best);
+  lora_big(-1, y, buf, 1, LCD_FG_COLOR);
+  // Delta trace: B - A per point, +-6 dB, band shaded
+  const int sx = 10, sw = LCD_WIDTH - 20, sy = y + FONT_STR_HEIGHT + 6, sh = LORA_CMP_BTN_Y - 8 - sy;
+  lcd_set_background(LCD_BG_COLOR);
+  lcd_fill(sx, sy, sw, sh);
+  float k = (float)sw / (float)(frequency1 - frequency0);
+  int bx0 = sx + ((float)lora_cmp.p.band_lo - (float)frequency0) * k;
+  int bx1 = sx + ((float)lora_cmp.p.band_hi - (float)frequency0) * k;
+  if (bx1 > bx0) {background_color = LORA_SHADE_COLOR; lcd_fill(bx0, sy, bx1 - bx0 + 1, sh);}
+  lcd_set_foreground(LCD_GRID_COLOR);
+  lcd_line(sx, sy, sx + sw, sy); lcd_line(sx, sy + sh, sx + sw, sy + sh);
+  for (int xx = sx; xx < sx + sw; xx+= 8) lcd_line(xx, sy + sh / 2, xx + 3, sy + sh / 2);
+  lcd_set_foreground(LCD_TRACE_2_COLOR);
+  int px = 0, py = 0;
+  for (int i = 0; i < LORA_CMP_POINTS && i < sweep_points; i++) {
+    float d = lora_cmp.b[i] - lora_cmp.a[i];
+    if (d > 6.0f) d = 6.0f; else if (d < -6.0f) d = -6.0f;
+    int yy = sy + sh / 2 - (int)(d * (sh / 12.0f));
+    int xx = sx + i * sw / (sweep_points - 1);
+    if (i) {lcd_line(px, py, xx, yy); lcd_line(px, py + 1, xx, yy + 1);}
+    px = xx; py = yy;
+  }
+  lcd_set_colors(LCD_GRID_COLOR, LCD_BG_COLOR);
+  lcd_drawstring(sx + 2, sy + 2, "B-A +6 dB");
+  lcd_drawstring(sx + 2, sy + sh - FONT_STR_HEIGHT, "-6 dB");
+}
+
 // draw_all() hook: full screen modes draw instead of the plot; also toast expiry
 bool lora_fullscreen_draw(void) {
   if (lora_toast_s.on && chVTTimeElapsedSinceX(lora_toast_s.start) > MS2ST(1000)) {
     lora_toast_s.on = false;
     lora_toast_invalidate();
     request_to_redraw(REDRAW_CELLS);
+  }
+  if (lora_cmp.state != LORA_CMP_OFF) {
+    if (redraw_request & REDRAW_CLRSCR) lora_cmp_static();
+    if (redraw_request & REDRAW_PLOT) {
+      if (lora_cmp.skip) lora_cmp.skip--;
+      else lora_cmp_draw();
+    }
+    return true;
   }
   if (!lora_tune_s.on) return false;
   if (redraw_request & REDRAW_CLRSCR) lora_tune_static();
@@ -727,6 +1024,20 @@ void lora_info_print(uint8_t mask) {
   }
   if (mask & LORA_PRINT_REF)
   shell_printf("ref %d %u %.3f %u\r\n", lora_ref.valid ? 1 : 0, (uint32_t)lora_ref.f_res, lora_ref.swr, (uint32_t)lora_ref.bw);
+  if (mask & LORA_PRINT_HOLD)
+    shell_printf("hold %d %u %.3f %u\r\n", lora_hold.on ? 1 : 0, lora_hold.sweeps,
+                 lora_hold.best_f > 0.0f ? lora_hold.best_swr : 0.0f, (uint32_t)lora_hold.best_f);
+  if (mask & LORA_PRINT_HOLD_DATA)
+    for (int i = 0; lora_hold.on && i < lora_hold.points && lora_hold.points == sweep_points; i++) {
+      float gmin = vna_sqrtf(lora_hold.qmin[i] / 65535.0f), gmax = vna_sqrtf(lora_hold.qmax[i] / 65535.0f);
+      shell_printf("%u %.3f %.3f\r\n", getFrequency(i), gmin < 0.999f ? (1 + gmin) / (1 - gmin) : 999.0f,
+                   gmax < 0.999f ? (1 + gmax) / (1 - gmax) : 999.0f);
+    }
+  if (mask & LORA_PRINT_CMP) {
+    lora_cmp_res_t r = lora_cmp_calc();
+    shell_printf("compare %d %d %.2f %.2f %.2f %.2f %.2f\r\n", lora_cmp.state, lora_cmp.a_valid ? 1 : 0,
+                 r.a, r.b, r.d, r.ok ? r.worst : 0.0f, r.ok ? r.best : 0.0f);
+  }
   if (!(mask & LORA_PRINT_TUNE)) return;
   if (lora_tune_s.on && lora_tune_s.skip)
     shell_printf("tune 1 %u 0 0 0\r\n", lora_tune_s.p.target);
@@ -882,6 +1193,7 @@ static void prepare_lora_info(uint8_t type, uint8_t update_mask) {
   if (get_electrical_delay() != 0.0f) lines++;
   if (lp.s.nband > 1 && m->ndip > 1) lines+= m->ndip - 1; // WIDE/SURVEY: dips instead of the BW line
   if (lora_ref_here()) lines++;                      // vs REF
+  if (lora_hold.on) lines++;                         // HOLD best
   int bh = lines * LORA_LINE_H + 3;
   if (bh != lp.box_h || lines != lp.lines) {lora_invalidate_box(); lp.box_h = bh; lp.lines = lines;}
   if ((update_mask & MEASURE_UPD_SWEEP) && !lora_box_cfg_x) {
@@ -1023,6 +1335,16 @@ static void draw_lora_info(int xp, int yp) {
   if (lora_ref_here()) {
     lcd_set_foreground(LCD_TRACE_2_COLOR);
     cell_printf(x, y, "vs REF " S_DELTA "f %+.3F" S_Hz " " S_DELTA "SWR %+.2f", m->f_res - lora_ref.f_res, m->swr - lora_ref.swr);
+    lcd_set_foreground(LCD_MEASURE_COLOR);
+    y+= LORA_LINE_H;
+  }
+  if (lora_hold.on) {
+    lcd_set_foreground(LCD_TRACE_1_COLOR);
+    if (lora_hold.best_f > 0.0f) {
+      lora_fmt_swr(buf, sizeof(buf), lora_hold.best_swr);
+      cell_printf(x, y, "HOLD best SWR %s @ %.5F" S_Hz, buf, lora_hold.best_f);
+    } else
+      cell_printf(x, y, "HOLD on, waiting for a sweep");
     lcd_set_foreground(LCD_MEASURE_COLOR);
     y+= LORA_LINE_H;
   }

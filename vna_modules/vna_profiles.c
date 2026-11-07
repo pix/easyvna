@@ -18,7 +18,8 @@
  *     preselects it and starts it after 3 s; first boot (or new firmware build) waits.
  * Profile screen action bar (instead of the frequency line), one tap each:
  *   [PROFILE] full screen chooser  [CAL] QUICK CAL wizard (OPEN/SHORT/LOAD -> profile slot)
- *   [TUNE] big digit tune screen   [REF] store S11 reference (hold: clear)   [HOLD] [S21]: later
+ *   [TUNE] big digit tune screen   [REF] store S11 reference (hold: clear)
+ *   [HOLD] min/max SWR envelope on/off   [S21] COMPARE two antennas against a fixed one
  *   Info block: drag to move, tap a moved block = auto position, tap its legend line = VIEW.
  *   Jog: left/right moves M1 (FREE), long push = M1 TRACK/FREE, short push = stock menu.
  * Shell:
@@ -27,7 +28,8 @@
  *   - "profile <name>"       apply profile (wide|433|869|915|survey|custom), prints its line
  *   - "profile view [rl|smith|all]"  show / set the profile VIEW (SWR+RL, SWR+Smith, all)
  *   - "profile info"         res/bw/q/worst/flag/dip/ref/tune lines (see vna_lora_plot.c)
- *   - "profile ref [store|clear]", "profile tune [on|off]"
+ *   - "profile ref [store|clear]", "profile tune [on|off]", "profile hold [on|off|data]",
+ *     "profile compare [on|store|new|off]"
  *
  * This is free software; you can redistribute it and/or modify it under the
  * terms of the GNU General Public License as published by the Free Software
@@ -245,9 +247,9 @@ static bool lora_custom_apply(bool remember) {
   return true;
 }
 
-static void lora_tune_exit(void);
+static void lora_fullscreen_exit(void);
 static void lora_select(int idx, bool remember) {
-  lora_tune_exit();                               // a profile change always ends TUNE
+  lora_fullscreen_exit();                         // a profile change always ends TUNE / COMPARE
   if (idx < LORA_PROFILE_COUNT) lora_profile_apply(idx, remember);
   else                          lora_custom_apply(remember);
 }
@@ -282,6 +284,8 @@ static void lora_m1_track(bool on) {
 // TUNE: narrow fast sweep (101 points over the band profile range), restored on exit
 //-----------------------------------------------------------------------------------------------------
 #define LORA_TUNE_POINTS 101
+#define LORA_CMP_POINTS  101               // = vna_lora_plot.c
+static void lora_tune_exit(void);
 static struct {freq_t f0, f1; uint16_t points, mode;} lora_tune_save LORA_CCM;
 
 // Band profile index for band b (0: 433, 1: 869, 2: 915)
@@ -290,20 +294,65 @@ static int lora_band_profile(int b) {
   return 0;
 }
 
-static bool lora_tune_enter(void) {
+static bool lora_fullscreen_active(void) {return lora_tune_active() || lora_cmp_active();}
+
+// Band for TUNE / COMPARE: the profile band, WIDE/SURVEY: band nearest to the resonance; -1 = no profile
+static int lora_work_band(void) {
   int p = lora_active();
-  if (p < 0 || lora_tune_active()) return false;
+  if (p < 0) return -1;
   int b = lora_profiles[p].band;
-  if (b < 0) {                                     // WIDE/SURVEY: band nearest to the resonance
+  if (b < 0) {
     float f = lora_res_freq(), best = 1e12f;
     for (int k = 0; k < (int)ARRAY_COUNT(lora_bands); k++) {
       float d = vna_fabsf(f - 0.5f * (float)(lora_bands[k][0] + lora_bands[k][1]));
       if (d < best) {best = d; b = k;}
     }
   }
-  const lora_profile_t *bp = &lora_profiles[lora_band_profile(b)];
+  return b;
+}
+
+static void lora_sweep_save(void) {
   lora_tune_save.f0 = frequency0; lora_tune_save.f1 = frequency1;
   lora_tune_save.points = sweep_points; lora_tune_save.mode = props_mode;
+}
+
+static void lora_sweep_restore(void) {
+  set_sweep_points(lora_tune_save.points);
+  set_sweep_frequency(ST_START, lora_tune_save.f0);
+  set_sweep_frequency(ST_STOP,  lora_tune_save.f1);
+  props_mode = lora_tune_save.mode;
+}
+
+// S21 COMPARE: 101 points over the band +- one band width
+static bool lora_cmp_enter(void) {
+  int b = lora_work_band();
+  if (b < 0 || lora_fullscreen_active()) return false;
+  const lora_profile_t *bp = &lora_profiles[lora_band_profile(b)];
+  freq_t lo = lora_bands[b][0], hi = lora_bands[b][1], bw = hi - lo;
+  lora_sweep_save();
+  set_sweep_points(LORA_CMP_POINTS);
+  set_sweep_frequency(ST_START, lo - bw);
+  set_sweep_frequency(ST_STOP,  hi + bw);
+  lora_tune_t t = {bp->title, bp->target, lo, hi, 0};
+  lora_cmp_start(&t);
+  if (!(sweep_mode & SWEEP_ENABLE)) toggle_sweep();
+  return true;
+}
+
+static void lora_cmp_exit(void) {
+  if (!lora_cmp_active()) return;
+  lora_sweep_restore();
+  lora_cmp_stop();
+}
+
+static void lora_fullscreen_exit(void) {lora_tune_exit(); lora_cmp_exit();}
+
+static bool lora_tune_enter(void) {
+  int p = lora_active();
+  if (p < 0 || lora_fullscreen_active()) return false;
+  int b = lora_work_band();                        // WIDE/SURVEY: band nearest to the resonance
+  const lora_profile_t *bp = &lora_profiles[lora_band_profile(b)];
+  lora_sweep_save();
   set_sweep_points(LORA_TUNE_POINTS);
   set_sweep_frequency(ST_START, bp->start);
   set_sweep_frequency(ST_STOP,  bp->stop);
@@ -317,10 +366,7 @@ static bool lora_tune_enter(void) {
 
 static void lora_tune_exit(void) {
   if (!lora_tune_active()) return;
-  set_sweep_points(lora_tune_save.points);
-  set_sweep_frequency(ST_START, lora_tune_save.f0);
-  set_sweep_frequency(ST_STOP,  lora_tune_save.f1);
-  props_mode = lora_tune_save.mode;
+  lora_sweep_restore();
   lora_tune_stop();
 }
 
@@ -508,8 +554,12 @@ void lora_draw_bar(void) {
     lora_scr_bar_button(3, "REF *", "hold: clear", GET_PALETTE_COLOR(LCD_TRACE_2_COLOR), LCD_MENU_TEXT_COLOR);
   else
     lora_scr_bar_button(3, "REF", "tap: store", norm, LCD_MENU_TEXT_COLOR);
-  lora_scr_bar_button(4, "HOLD", "soon", off, LCD_FG_COLOR);
-  lora_scr_bar_button(5, "S21", "soon", off, LCD_FG_COLOR);
+  (void)off;
+  if (lora_hold_active())
+    lora_scr_bar_button(4, "HOLD on", "tap: off", GET_PALETTE_COLOR(LCD_TRACE_1_COLOR), LCD_MENU_TEXT_COLOR);
+  else
+    lora_scr_bar_button(4, "HOLD", "off", norm, LCD_MENU_TEXT_COLOR);
+  lora_scr_bar_button(5, "S21", "compare", norm, LCD_MENU_TEXT_COLOR);
 }
 
 static bool lora_touch_bar(int tx, int ty) {
@@ -530,7 +580,11 @@ static bool lora_touch_bar(int tx, int ty) {
         if (lora_ref_store()) lora_toast(had ? "REF updated (hold REF to clear)" : "REF saved (hold REF to clear)");
       }
       break;
-    default: lora_toast(b == 4 ? "HOLD: coming in the next update" : "S21: coming in the next update"); break;
+    case 4:
+      lora_hold_set(!lora_hold_active());
+      lora_toast(lora_hold_active() ? "HOLD on: min/max envelope" : "HOLD off");
+      break;
+    default: lora_cmp_enter(); break;
   }
   request_to_redraw(REDRAW_FREQUENCY);
   return true;
@@ -541,7 +595,7 @@ static bool lora_touch_bar(int tx, int ty) {
 //-----------------------------------------------------------------------------------------------------
 // Jog left/right: true = consumed
 static bool lora_jog_marker(void) {
-  if (lora_tune_active()) return true;
+  if (lora_fullscreen_active()) return true;
   if (!lora_screen_active()) return false;
   if (active_marker != 0 || (props_mode & TD_MARKER_TRACK)) lora_m1_track(false);
   return false;
@@ -549,7 +603,7 @@ static bool lora_jog_marker(void) {
 
 // Jog push: true = consumed (TUNE: exit; profile screen long press: M1 TRACK <-> FREE)
 static bool lora_jog_push(void) {
-  if (lora_tune_active()) {lora_tune_exit(); return true;}
+  if (lora_fullscreen_active()) {lora_fullscreen_exit(); return true;}
   if (!lora_screen_active()) return false;
   if (btn_wait_release() != EVT_BUTTON_DOWN_LONG) return false;   // short press: menu
   lora_m1_track(!(props_mode & TD_MARKER_TRACK));
@@ -596,6 +650,15 @@ static bool lora_touch_info(int tx, int ty) {
 // Normal mode touch: TUNE exit, action bar, info block
 static bool lora_touch(int tx, int ty) {
   if (lora_tune_active()) {touch_wait_release(); lora_tune_exit(); return true;}
+  if (lora_cmp_active()) {
+    touch_wait_release();
+    switch (lora_cmp_touch(tx, ty)) {
+      case 0: lora_cmp_exit(); break;
+      case 1: lora_cmp_store_a(); break;
+      case 2: lora_cmp_new_a(); break;
+    }
+    return true;
+  }
   if (!lora_screen_active()) return false;
   return lora_touch_bar(tx, ty) || lora_touch_info(tx, ty);
 }
@@ -756,7 +819,7 @@ void cmd_profile(int argc, char *argv[]) {
     shell_printf("view %s\r\n", lora_view_names[lora_view()]);
     return;
   }
-  if (get_str_index(argv[0], "info") == 0) {lora_info_print(LORA_PRINT_INFO | LORA_PRINT_REF | LORA_PRINT_TUNE); return;}
+  if (get_str_index(argv[0], "info") == 0) {lora_info_print(LORA_PRINT_INFO | LORA_PRINT_REF | LORA_PRINT_HOLD | LORA_PRINT_CMP | LORA_PRINT_TUNE); return;}
   if (get_str_index(argv[0], "ref") == 0) {
     if (argc == 2) {
       i = get_str_index(argv[1], "store|clear");
@@ -767,12 +830,34 @@ void cmd_profile(int argc, char *argv[]) {
     lora_info_print(LORA_PRINT_REF);
     return;
   }
+  if (get_str_index(argv[0], "hold") == 0) {
+    if (argc == 2) {
+      i = get_str_index(argv[1], "on|off|data");
+      if (i < 0) goto usage;
+      if (i == 2) {lora_info_print(LORA_PRINT_HOLD_DATA); return;}
+      lora_hold_set(i == 0);
+    }
+    lora_info_print(LORA_PRINT_HOLD);
+    return;
+  }
+  if (get_str_index(argv[0], "compare") == 0) {
+    if (argc == 2) {
+      i = get_str_index(argv[1], "on|store|new|off");
+      if (i < 0) goto usage;
+      if (i == 0 && !lora_cmp_active() && !lora_cmp_enter()) {shell_printf("error: not on a profile\r\n"); return;}
+      if (i == 1) lora_cmp_store_a();
+      if (i == 2) lora_cmp_new_a();
+      if (i == 3) lora_cmp_exit();
+    }
+    lora_info_print(LORA_PRINT_CMP);
+    return;
+  }
   if (get_str_index(argv[0], "tune") == 0) {
     if (argc == 2) {
       i = get_str_index(argv[1], "on|off");
       if (i < 0) goto usage;
       if (i == 1) lora_tune_exit();
-      else if (!lora_tune_active() && !lora_tune_enter()) {shell_printf("error: not on a profile\r\n"); return;}
+      else if (!lora_tune_active() && !lora_tune_enter()) {shell_printf("error: not on a profile, or COMPARE on\r\n"); return;}
     }
     lora_info_print(LORA_PRINT_TUNE);
     return;
@@ -784,6 +869,6 @@ void cmd_profile(int argc, char *argv[]) {
   }
 usage:
   shell_printf("usage: profile [" LORA_PROFILE_NAMES "|custom] | profile view [" LORA_VIEW_SHELL "]\r\n"
-               "       profile info | profile ref [store|clear] | profile tune [on|off]\r\n");
+               "       profile info | ref [store|clear] | tune [on|off] | hold [on|off|data] | compare [on|store|new|off]\r\n");
 }
 #endif // __VNA_LORA_PROFILES__

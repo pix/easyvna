@@ -1216,6 +1216,7 @@ static void plot_into_index(void) {
       trace_into_index(t);
 #ifdef __VNA_LORA_PROFILES__
   lora_ref_into_index();
+  lora_hold_update();
 #endif
 //  STOP_PROFILE;
   // Marker track on data update
@@ -1448,6 +1449,7 @@ static void draw_cell(int x0, int y0) {
 #endif
 #ifdef __VNA_LORA_PROFILES__
   lora_cell_background(x0, w, h);
+  lora_cell_hold(x0, y0, w, h);
 #endif
 
 // Draw grid

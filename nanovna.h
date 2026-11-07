@@ -1471,6 +1471,17 @@ float lora_res_freq(void);                     // last resonance (Hz)
 #define LORA_PRINT_INFO 1
 #define LORA_PRINT_REF  2
 #define LORA_PRINT_TUNE 4
+#define LORA_PRINT_HOLD 8
+#define LORA_PRINT_HOLD_DATA 16
+#define LORA_PRINT_CMP  32
+void  lora_hold_set(bool on);                  // HOLD envelope on (clears) / off
+bool  lora_hold_active(void);
+void  lora_cmp_start(const lora_tune_t *t);    // S21 COMPARE full screen (caller sets the sweep)
+void  lora_cmp_stop(void);
+bool  lora_cmp_active(void);
+void  lora_cmp_store_a(void);
+void  lora_cmp_new_a(void);
+int   lora_cmp_touch(int x, int y);            // 0 exit, 1 store A, 2 new A, -1 nothing
 void  lora_info_print(uint8_t mask);           // shell: profile info / ref / tune lines
 // vna_profiles.c (ui.c): profile action bar (replaces the frequency line on the profile screen)
 void  lora_draw_bar(void);
