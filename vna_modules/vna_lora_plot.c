@@ -196,10 +196,134 @@ static void lora_cell_guides(int x0, int y0, int w) {
   }
 }
 
-// Draw marker plate of trace t on the profile screen? (only SWR/current and Smith)
-static inline bool lora_marker_on_trace(int t) {
-  return !lora_screen_on || t == current_trace || trace[t].type == TRC_SMITH;
+// Profile screen marker glyphs (marker set 2, 11x14): R (resonance, M1 TRACK), L / H (band edges)
+// Each: plate below the point (down) then plate above the point (up), drawn over the marker plate.
+#if _USE_MARKER_SET_ == 2
+#define LORA_GLYPH_R 0
+#define LORA_GLYPH_L 1
+#define LORA_GLYPH_H 2
+static const uint8_t lora_marker_glyphs[] = {
+  // R
+  _BMP16(0b1111111111100000),
+  _BMP16(0b1000000000100000),
+  _BMP16(0b1001111100100000),
+  _BMP16(0b1001100110100000),
+  _BMP16(0b1001100110100000),
+  _BMP16(0b1001111100100000),
+  _BMP16(0b1001111000100000),
+  _BMP16(0b1001101100100000),
+  _BMP16(0b1001100110100000),
+  _BMP16(0b1001100110100000),
+  _BMP16(0b0100000001000000),
+  _BMP16(0b0010000010000000),
+  _BMP16(0b0001000100000000),
+  _BMP16(0b0000101000000000),
+
+  _BMP16(0b0000101000000000),
+  _BMP16(0b0001000100000000),
+  _BMP16(0b0010000010000000),
+  _BMP16(0b0100000001000000),
+  _BMP16(0b1001111100100000),
+  _BMP16(0b1001100110100000),
+  _BMP16(0b1001100110100000),
+  _BMP16(0b1001111100100000),
+  _BMP16(0b1001111000100000),
+  _BMP16(0b1001101100100000),
+  _BMP16(0b1001100110100000),
+  _BMP16(0b1001100110100000),
+  _BMP16(0b1000000000100000),
+  _BMP16(0b1111111111100000),
+  // L
+  _BMP16(0b1111111111100000),
+  _BMP16(0b1000000000100000),
+  _BMP16(0b1001100000100000),
+  _BMP16(0b1001100000100000),
+  _BMP16(0b1001100000100000),
+  _BMP16(0b1001100000100000),
+  _BMP16(0b1001100000100000),
+  _BMP16(0b1001100000100000),
+  _BMP16(0b1001100000100000),
+  _BMP16(0b1001111110100000),
+  _BMP16(0b0100000001000000),
+  _BMP16(0b0010000010000000),
+  _BMP16(0b0001000100000000),
+  _BMP16(0b0000101000000000),
+
+  _BMP16(0b0000101000000000),
+  _BMP16(0b0001000100000000),
+  _BMP16(0b0010000010000000),
+  _BMP16(0b0100000001000000),
+  _BMP16(0b1001100000100000),
+  _BMP16(0b1001100000100000),
+  _BMP16(0b1001100000100000),
+  _BMP16(0b1001100000100000),
+  _BMP16(0b1001100000100000),
+  _BMP16(0b1001100000100000),
+  _BMP16(0b1001100000100000),
+  _BMP16(0b1001111110100000),
+  _BMP16(0b1000000000100000),
+  _BMP16(0b1111111111100000),
+  // H
+  _BMP16(0b1111111111100000),
+  _BMP16(0b1000000000100000),
+  _BMP16(0b1001100110100000),
+  _BMP16(0b1001100110100000),
+  _BMP16(0b1001100110100000),
+  _BMP16(0b1001111110100000),
+  _BMP16(0b1001111110100000),
+  _BMP16(0b1001100110100000),
+  _BMP16(0b1001100110100000),
+  _BMP16(0b1001100110100000),
+  _BMP16(0b0100000001000000),
+  _BMP16(0b0010000010000000),
+  _BMP16(0b0001000100000000),
+  _BMP16(0b0000101000000000),
+
+  _BMP16(0b0000101000000000),
+  _BMP16(0b0001000100000000),
+  _BMP16(0b0010000010000000),
+  _BMP16(0b0100000001000000),
+  _BMP16(0b1001100110100000),
+  _BMP16(0b1001100110100000),
+  _BMP16(0b1001100110100000),
+  _BMP16(0b1001111110100000),
+  _BMP16(0b1001111110100000),
+  _BMP16(0b1001100110100000),
+  _BMP16(0b1001100110100000),
+  _BMP16(0b1001100110100000),
+  _BMP16(0b1000000000100000),
+  _BMP16(0b1111111111100000),
+};
+#endif
+
+// Marker glyph on the profile screen, NULL = stock number. M1: R while tracking the minimum,
+// stock "1" when FREE; band profiles: M2 = L (low edge), M3 = H (high edge); WIDE: stock numbers.
+static const uint8_t *lora_marker_glyph(int m, bool up) {
+#if _USE_MARKER_SET_ == 2
+  if (!lora_screen_on) return NULL;
+  int g;
+  if (m == 0) {
+    if (!(props_mode & TD_MARKER_TRACK)) return NULL;
+    g = LORA_GLYPH_R;
+  } else if (lp.s.mk == NULL && m <= 2)
+    g = m == 1 ? LORA_GLYPH_L : LORA_GLYPH_H;
+  else
+    return NULL;
+  return &lora_marker_glyphs[(g * 4 + (up ? 2 : 0)) * MARKER_HEIGHT];
+#else
+  (void)m; (void)up;
+  return NULL;
+#endif
 }
+
+// Draw marker plate of trace t on the profile screen? (only SWR, current and Smith)
+static inline bool lora_marker_on_trace(int t) {
+  return !lora_screen_on || t == 0 || t == current_trace || trace[t].type == TRC_SMITH;
+}
+
+// ui.c side
+bool lora_screen_active(void) {return lora_screen_on;}
+bool lora_marker_shown(int t) {return lora_marker_on_trace(t);}
 
 //=====================================================================================================
 // LORA INFO measure mode
@@ -248,7 +372,7 @@ static int lora_box_score(int bx, int by, int bh) {
     const index_t *idx = trace_index[t];
     for (int i = 0; i < sweep_points; i++)
       if (idx[i].x >= x0 && idx[i].x <= x1 && idx[i].y >= y0 && idx[i].y <= y1) n++;
-    if (t != current_trace) continue;
+    if (t != 0) continue;                        // marker plates on the SWR trace
     for (int m = 0; m < MARKERS_MAX; m++) {
       if (!markers[m].enabled) continue;
       const index_t *p = &idx[markers[m].index];
@@ -256,6 +380,17 @@ static int lora_box_score(int bx, int by, int bh) {
     }
   }
   return n;
+}
+
+// Info block moved by hand: position in spare config bytes (x/2, y/2), x byte 0 = auto placement
+#define lora_box_cfg_x   config._reserved[1]
+#define lora_box_cfg_y   config._reserved[2]
+
+static void lora_box_clamp(int *x, int *y) {
+  if (*x > CELLOFFSETX + WIDTH - LORA_BOX_W) *x = CELLOFFSETX + WIDTH - LORA_BOX_W;
+  if (*x < CELLOFFSETX + 1)                  *x = CELLOFFSETX + 1;
+  if (*y > HEIGHT - lp.box_h)                *y = HEIGHT - lp.box_h;
+  if (*y < 0)                                *y = 0;
 }
 
 static void lora_box_rect(int corner, int *x, int *y) {
@@ -269,6 +404,33 @@ static void lora_box_rect(int corner, int *x, int *y) {
 
 static void lora_invalidate_box(void) {
   invalidate_rect(lp.box_x, lp.box_y, lp.box_x + LORA_BOX_W, lp.box_y + lp.box_h);
+}
+
+// Set box position from the corner (auto) or the config bytes (manual), invalidate old/new place
+static void lora_box_position(void) {
+  int bx, by;
+  if (lora_box_cfg_x) {bx = lora_box_cfg_x * 2; by = lora_box_cfg_y * 2; lora_box_clamp(&bx, &by);}
+  else                lora_box_rect(lp.corner, &bx, &by);
+  if (bx != lp.box_x || by != lp.box_y) {lora_invalidate_box(); lp.box_x = bx; lp.box_y = by;}
+  lora_invalidate_box();
+}
+
+// ui.c side: info block rect in area coordinates, false if not shown
+bool lora_info_rect(int *x, int *y, int *w, int *h) {
+  if (!lora_screen_on || lp.box_h == 0) return false;
+  *x = lp.box_x; *y = lp.box_y; *w = LORA_BOX_W; *h = lp.box_h;
+  return true;
+}
+
+// ui.c side: move the info block by hand (area coordinates, clamped), x < 0 = back to auto placement.
+// Only RAM config is changed here, the caller saves it.
+void lora_info_place(int x, int y) {
+  if (x < 0) lora_box_cfg_x = 0;
+  else {
+    lora_box_clamp(&x, &y);
+    lora_box_cfg_x = x / 2; lora_box_cfg_y = y / 2;
+  }
+  lora_box_position();
 }
 
 static void prepare_lora_info(uint8_t type, uint8_t update_mask) {
@@ -326,7 +488,7 @@ static void prepare_lora_info(uint8_t type, uint8_t update_mask) {
     char sv[8];
     lora_fmt_swr(sv, sizeof(sv), v);
     if (lp.s.mk) plot_printf(lp.lbl[k], sizeof(lp.lbl[k]), "%u:%s", (uint32_t)(lp.s.mk[k] / 1000000U), sv);
-    else         plot_printf(lp.lbl[k], sizeof(lp.lbl[k]), "%s", sv);
+    else         plot_printf(lp.lbl[k], sizeof(lp.lbl[k]), "%c %s", k == 0 ? 'L' : 'H', sv);
     int w  = lora_str_width(lp.lbl[k]);
     int xm = CELLOFFSETX + (idx * WIDTH + (sweep_points - 1) / 2) / (sweep_points - 1);
     int x  = lp.s.mk ? xm - w / 2 : (k == 0 ? xm - 3 - w : xm + 3);   // band: lo left of edge, hi right
@@ -338,12 +500,12 @@ static void prepare_lora_info(uint8_t type, uint8_t update_mask) {
   }
   invalidate_rect(0, 0, AREA_WIDTH_NORMAL - 1, LORA_LBL_Y + LORA_LBL_H);
   // Info block: line count, then the plot corner with the least trace points under it
-  int lines = 6;                                     // chips, res, swr/rl, z, bw, legend
-  if (!(props_mode & TD_MARKER_TRACK)) lines++;      // M1 line when not tracking
+  int lines = 6;                                     // chips, M1/res, swr/rl, z, bw, legend
+  if (!(props_mode & TD_MARKER_TRACK)) lines++;      // M1 FREE: M1 readout + resonance line
   if (get_electrical_delay() != 0.0f) lines++;
   int bh = lines * LORA_LINE_H + 3;
   if (bh != lp.box_h || lines != lp.lines) {lora_invalidate_box(); lp.box_h = bh; lp.lines = lines;}
-  if (update_mask & MEASURE_UPD_SWEEP) {
+  if ((update_mask & MEASURE_UPD_SWEEP) && !lora_box_cfg_x) {
     int score[4], best = lp.corner, bx, by;
     for (int c = 0; c < 4; c++) {
       lora_box_rect(c, &bx, &by);
@@ -355,10 +517,7 @@ static void prepare_lora_info(uint8_t type, uint8_t update_mask) {
       lp.corner = best;
     }
   }
-  int bx, by;
-  lora_box_rect(lp.corner, &bx, &by);
-  if (bx != lp.box_x || by != lp.box_y) {lora_invalidate_box(); lp.box_x = bx; lp.box_y = by;}
-  lora_invalidate_box();
+  lora_box_position();
 }
 
 // Filled chip with black text (no shadow), return width
@@ -423,23 +582,44 @@ static void draw_lora_info(int xp, int yp) {
   lora_chip(x, y, cal_chip[lp.s.cal].text, GET_PALETTE_COLOR(cal_chip[lp.s.cal].color));
   x = bx + 3; y+= LORA_LINE_H;
   lcd_set_foreground(LCD_MEASURE_COLOR);
-  // 2: resonance and offset from band centre
-  if (lp.s.target)
-    cell_printf(x, y, "Res %.6F" S_Hz " %+.3F" S_Hz, m->f_res, m->f_res - (float)lp.s.target);
+  bool track = props_mode & TD_MARKER_TRACK;
+  int i = markers[0].enabled ? markers[0].index : m->res_idx;
+  // 2: M1 state + frequency. TRACK: M1 = resonance (interpolated) + offset from band centre,
+  //    FREE: M1 frequency (moved by jog/touch, long jog press = back to TRACK)
+  foreground_color = GET_PALETTE_COLOR(track ? LCD_TRACE_1_COLOR : LCD_LOW_BAT_COLOR);
+  int w = lora_print(x, y, track ? "M1 TRACK " : "M1 FREE ");
+  lcd_set_foreground(LCD_FG_COLOR);
+  if (!track)
+    cell_printf(x + w, y, "%.6F" S_Hz, (float)getFrequency(i));
+  else if (lp.s.target)
+    cell_printf(x + w, y, "%.6F" S_Hz " %+.3F" S_Hz, m->f_res, m->f_res - (float)lp.s.target);
   else
-    cell_printf(x, y, "Res %.6F" S_Hz, m->f_res);
+    cell_printf(x + w, y, "%.6F" S_Hz, m->f_res);
   y+= LORA_LINE_H;
-  // 3: SWR (colour = quality) and return loss
-  lora_fmt_swr(buf, sizeof(buf), m->swr);
-  int w = lora_print(x, y, "SWR ");
-  foreground_color = lora_swr_color(m->swr);
+  // 3: SWR (colour = quality) and return loss at M1 (TRACK: at the minimum)
+  float v_swr = track ? m->swr : swr(i, measured[0][i]);
+  float v_rl  = track ? m->rl  : -logmag(i, measured[0][i]);
+  lora_fmt_swr(buf, sizeof(buf), v_swr);
+  w = lora_print(x, y, "SWR ");
+  foreground_color = lora_swr_color(v_swr);
   w+= lora_print(x + w, y, buf);
+  lcd_set_foreground(LCD_FG_COLOR);
+  cell_printf(x + w, y, "  RL %.1f" S_dB, v_rl);
+  y+= LORA_LINE_H;
+  // 4: impedance at M1
+  if (track) cell_printf(x, y, "Z %.1f%+j.1f" S_OHM, m->r, m->x);
+  else       cell_printf(x, y, "Z %.1f%+j.1f" S_OHM, resistance(i, measured[0][i]), reactance(i, measured[0][i]));
+  y+= LORA_LINE_H;
   lcd_set_foreground(LCD_MEASURE_COLOR);
-  cell_printf(x + w, y, "  RL %.1f" S_dB, m->rl);
-  y+= LORA_LINE_H;
-  // 4: impedance at resonance
-  cell_printf(x, y, "Z %.1f%+j.1f" S_OHM, m->r, m->x);
-  y+= LORA_LINE_H;
+  // FREE: resonance summary stays visible
+  if (!track) {
+    lora_fmt_swr(buf, sizeof(buf), m->swr);
+    if (lp.s.target)
+      cell_printf(x, y, "Res %.5F" S_Hz " %+.3F" S_Hz, m->f_res, m->f_res - (float)lp.s.target);
+    else
+      cell_printf(x, y, "Res %.5F" S_Hz " SWR %s", m->f_res, buf);
+    y+= LORA_LINE_H;
+  }
   // 5: SWR<=2 bandwidth and Q = f/BW
   if (!m->bw)
     cell_printf(x, y, "BW(SWR<2) none");
@@ -448,13 +628,6 @@ static void draw_lora_info(int xp, int yp) {
   else
     cell_printf(x, y, "BW(SWR<2) %.3F" S_Hz "  Q %.1f", m->f_hi - m->f_lo, m->f_res / (m->f_hi - m->f_lo));
   y+= LORA_LINE_H;
-  // M1 when not tracking the minimum (moved by hand)
-  if (!(props_mode & TD_MARKER_TRACK) && markers[0].enabled) {
-    int i = markers[0].index;
-    lora_fmt_swr(buf, sizeof(buf), swr(i, measured[0][i]));
-    cell_printf(x, y, "M1 %.6F" S_Hz " SWR %s", (float)getFrequency(i), buf);
-    y+= LORA_LINE_H;
-  }
   float ed = get_electrical_delay();
   if (ed != 0.0f) {
     cell_printf(x, y, "Edelay %F" S_SECOND, ed);

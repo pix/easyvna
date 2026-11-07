@@ -239,6 +239,68 @@ static void lora_select(int idx, bool remember) {
 }
 
 //=====================================================================================================
+// Profile screen input (normal mode, called from ui.c handlers)
+//  - jog long press: M1 TRACK (follows the SWR minimum) <-> FREE (stays where it is put);
+//    short press opens the menu as usual (on release instead of on press)
+//  - jog left/right: moves M1 (never the band markers), switches M1 to FREE
+//  - touch: only M1 can be dragged (-> FREE); the info block can be dragged anywhere in the plot
+//    (position saved once on release), a tap on a moved block puts it back to automatic placement
+//=====================================================================================================
+#define lora_box_moved()   (config._reserved[1] != 0)   // see vna_lora_plot.c
+
+static void lora_m1_track(bool on) {
+  markers[0].enabled = TRUE;
+  active_marker   = 0;
+  previous_marker = MARKER_INVALID;
+  if (on) props_mode|= TD_MARKER_TRACK; else props_mode&= ~TD_MARKER_TRACK;
+  select_lever_mode(LM_MARKER);
+  request_to_redraw(REDRAW_PLOT | REDRAW_MARKER);   // TRACK: snaps M1 to the minimum at once
+}
+
+static void lora_jog_marker(void) {
+  if (!lora_screen_active()) return;
+  if (active_marker != 0 || (props_mode & TD_MARKER_TRACK)) lora_m1_track(false);
+}
+
+static bool lora_jog_push(void) {
+  if (!lora_screen_active()) return false;
+  if (btn_wait_release() != EVT_BUTTON_DOWN_LONG) return false;   // short press: menu
+  lora_m1_track(!(props_mode & TD_MARKER_TRACK));
+  while (get_buttons() & BUTTON_PUSH) chThdSleepMilliseconds(10);  // ignore the release
+  last_button = get_buttons();
+  return true;
+}
+
+static bool lora_touch_info(int tx, int ty) {
+  int bx, by, bw, bh;
+  if (tx <= UI_SCALE_REF_X1 || !lora_info_rect(&bx, &by, &bw, &bh)) return false;  // keep scale/ref area
+  int ax = tx - OFFSETX, ay = ty - OFFSETY;
+  if (ax < bx || ax >= bx + bw || ay < by || ay >= by + bh) return false;
+  bool moved = false;
+  do {
+    int x, y;
+    touch_position(&x, &y);
+    int dx = x - tx, dy = y - ty;
+    if (!moved && dx * dx + dy * dy > 8 * 8) moved = true;
+    if (moved) {
+      lora_info_place(bx + dx, by + dy);
+      request_to_redraw(REDRAW_CELLS);
+      draw_all();
+    } else
+      chThdSleepMilliseconds(20);
+  } while (touch_check() != EVT_TOUCH_RELEASED);
+  if (moved)
+    config_save();                    // one flash write per drag
+  else if (lora_box_moved()) {        // tap on a moved block: automatic placement again
+    lora_info_place(-1, 0);
+    config_save();
+    request_to_redraw(REDRAW_CELLS);
+  } else
+    ui_mode_menu();                   // tap on the block: same as a tap elsewhere on the plot
+  return true;
+}
+
+//=====================================================================================================
 // Power on chooser, drawn over the splash screen (called in sweep thread after ui_init())
 //=====================================================================================================
 #define BOOT_ASK_TICKS   30                                   // x 100ms = 3 s
@@ -491,8 +553,21 @@ static UI_FUNCTION_CALLBACK(menu_lora_save_custom_cb) {
   ui_message_box("CUSTOM", msg, 1500);
 }
 
+static UI_FUNCTION_ADV_CALLBACK(menu_lora_box_auto_acb) {
+  (void)data;
+  if (b) {
+    b->icon = lora_box_moved() ? BUTTON_ICON_NOCHECK : BUTTON_ICON_CHECK;
+    return;
+  }
+  if (!lora_box_moved()) return;
+  lora_info_place(-1, 0);
+  config_save();
+  request_to_redraw(REDRAW_AREA);
+}
+
 static const menuitem_t menu_lora_options[] = {
   { MT_ADV_CALLBACK, 0, "AUTOSCALE",           menu_lora_autoscale_acb },
+  { MT_ADV_CALLBACK, 0, "INFO BOX\nAUTO POS",  menu_lora_box_auto_acb },
   { MT_ADV_CALLBACK, 0, "ASK AT\nPOWER ON",    menu_lora_ask_acb },
   { MT_CALLBACK,     0, "SAVE AS\nCUSTOM",     menu_lora_save_custom_cb },
   { MT_NEXT, 0, NULL, menu_back } // next-> menu_back

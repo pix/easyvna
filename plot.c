@@ -1522,7 +1522,11 @@ static void draw_cell(int x0, int y0) {
 
 #if 1
   // draw marker symbols on each trace
-  for (int i = 0; i < MARKERS_MAX; i++) {
+  for (int k = 0; k < MARKERS_MAX; k++) {
+    int i = k;
+#ifdef __VNA_LORA_PROFILES__
+    if (lora_screen_on) i = MARKERS_MAX - 1 - k;  // profile screen: M1 (R) on top of band markers
+#endif
     if (!markers[i].enabled)
       continue;
     int mk_idx = markers[i].index;
@@ -1544,6 +1548,10 @@ static void draw_cell(int x0, int y0) {
         plate = MARKER_BITMAP(0);
         marker = MARKER_BITMAP(i+1);
       }
+#ifdef __VNA_LORA_PROFILES__
+      const uint8_t *glyph = lora_marker_glyph(i, index[mk_idx].y < MARKER_HEIGHT * 2);
+      if (glyph) marker = glyph;
+#endif
       // Check marker icon on cell
       if ((uint32_t)(x+MARKER_WIDTH ) < (CELLWIDTH  + MARKER_WIDTH ) &&
           (uint32_t)(y+MARKER_HEIGHT) < (CELLHEIGHT + MARKER_HEIGHT)) {

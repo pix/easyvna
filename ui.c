@@ -3516,6 +3516,9 @@ static void ui_mode_normal(void) {
 
 #define MARKER_SPEEDUP  3
 static void lever_move_marker(uint16_t status) {
+#ifdef __VNA_LORA_PROFILES__
+  lora_jog_marker();   // profile screen: jog moves M1 only, switches M1 to FREE
+#endif
   if (active_marker == MARKER_INVALID || !markers[active_marker].enabled) return;
   uint16_t step = 1<<MARKER_SPEEDUP;
   do {
@@ -3602,6 +3605,11 @@ static bool touch_pickup_marker(int touch_x, int touch_y) {
     for (m = 0; m < MARKERS_MAX; m++) {
       if (!markers[m].enabled)
         continue;
+#ifdef __VNA_LORA_PROFILES__
+      // Profile screen: only M1 can be grabbed (band markers stay on the band edges), on shown plates
+      if (lora_screen_active() && (m != 0 || !lora_marker_shown(t)))
+        continue;
+#endif
       // Get distance to marker from touch point
       int dist = distance_to_index(t, markers[m].index, touch_x, touch_y);
       if (dist < min_dist) {
@@ -3635,6 +3643,12 @@ static bool touch_pickup_marker(int touch_x, int touch_y) {
     } else
       chThdSleepMilliseconds(50); // Not check new position too fast
   } while (touch_check()!= EVT_TOUCH_RELEASED);
+#ifdef __VNA_LORA_PROFILES__
+  if (lora_screen_active()) {     // profile screen: SWR stays the current trace, M1 FREE
+    set_active_trace(0);
+    previous_marker = MARKER_INVALID;
+  }
+#endif
   return TRUE;
 }
 
@@ -3660,6 +3674,9 @@ static bool touch_lever_mode_select(int touch_x, int touch_y) {
 
 static void ui_normal_lever(uint16_t status) {
   if (status & EVT_BUTTON_SINGLE_CLICK) {
+#ifdef __VNA_LORA_PROFILES__
+    if (lora_jog_push()) return;  // profile screen: long press = M1 TRACK <-> FREE
+#endif
     ui_mode_menu();
     return;
   }
@@ -3705,6 +3722,9 @@ static bool touch_made_screenshot(int touch_x, int touch_y) {
 #endif
 
 static void ui_normal_touch(int touch_x, int touch_y) {
+#ifdef __VNA_LORA_PROFILES__
+  if (lora_touch_info(touch_x, touch_y)) return;         // Profile screen: drag / tap info block
+#endif
   if (touch_pickup_marker(touch_x, touch_y)) return;     // Try drag marker
 #ifdef __USE_SD_CARD__
   if (touch_made_screenshot(touch_x, touch_y)) return;   // Try made screenshot

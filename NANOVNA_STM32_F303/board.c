@@ -71,6 +71,9 @@ const PALConfig pal_default_config = {
  * so the ROM DFU never enumerates. Instead: set a magic word in CCM RAM (not cleared
  * by the startup code), pull D+ low so the host sees a disconnect, reset the MCU, and
  * jump to the bootloader from __early_init() with the chip in its reset state.
+ * Note: ChibiOS Reset_Handler starts with "cpsid i" (PRIMASK = 1) before calling
+ * __early_init(); the ROM bootloader's USB stack is interrupt driven, so interrupts
+ * must be unmasked again before the jump (all NVIC lines are still disabled at reset).
  */
 #define DFU_MAGIC 0xDF0B007AU
 static volatile uint32_t dfu_request __attribute__((section(".ram4")));
@@ -90,10 +93,13 @@ static void __attribute__((noreturn)) dfu_jump(void) {
   uint32_t pc = *((volatile uint32_t *)(STM32F303xC_SYSTEM_MEMORY + 4));
   // Map system memory at 0x0 (bootloader vectors), main stack, thread mode on MSP (crt0 runs on PSP)
   RCC->APB2ENR|= RCC_APB2ENR_SYSCFGEN;
+  (void)RCC->APB2ENR;                      // clock enable takes effect before SYSCFG access
+  __DSB();
   SYSCFG->CFGR1 = (SYSCFG->CFGR1 & ~SYSCFG_CFGR1_MEM_MODE) | SYSCFG_CFGR1_MEM_MODE_0;
   __asm volatile ("msr msp, %0   \n"
                   "msr control, %2\n"
                   "isb           \n"
+                  "cpsie i       \n"   // crt0 masked interrupts, the ROM DFU needs them
                   "bx  %1        \n" :: "r"(sp), "r"(pc), "r"(0) : "memory");
   while (1);
 }
