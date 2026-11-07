@@ -2914,6 +2914,10 @@ typedef struct {
 // Command can run in load script
 #define CMD_RUN_IN_LOAD 8
 
+#ifdef __VNA_LORA_PROFILES__
+// LoRa antenna profiles shell command (implemented in vna_modules/vna_profiles.c)
+void cmd_profile(int argc, char *argv[]);
+#endif
 static const VNAShellCommand commands[] =
 {
     {"scan"        , cmd_scan        , CMD_WAIT_MUTEX|CMD_BREAK_SWEEP},
@@ -2970,6 +2974,9 @@ static const VNAShellCommand commands[] =
     {"cal"         , cmd_cal         , CMD_WAIT_MUTEX},
     {"save"        , cmd_save        , CMD_RUN_IN_LOAD},
     {"recall"      , cmd_recall      , CMD_WAIT_MUTEX|CMD_BREAK_SWEEP|CMD_RUN_IN_UI|CMD_RUN_IN_LOAD},
+#ifdef __VNA_LORA_PROFILES__
+    {"profile"     , cmd_profile     , CMD_WAIT_MUTEX|CMD_BREAK_SWEEP|CMD_RUN_IN_LOAD},
+#endif
     {"trace"       , cmd_trace       , CMD_RUN_IN_LOAD},
     {"marker"      , cmd_marker      , CMD_RUN_IN_LOAD},
     {"edelay"      , cmd_edelay      , CMD_RUN_IN_LOAD},

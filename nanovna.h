@@ -86,6 +86,8 @@
 #define __VNA_MEASURE_MODULE__
 // Add Z normalization feature
 //#define __VNA_Z_RENORMALIZATION__
+// Add quick antenna profiles (LoRa bands) and quick S11 calibration menu (vna_modules/vna_profiles.c)
+#define __VNA_LORA_PROFILES__
 
 /*
  * Submodules defines

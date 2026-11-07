@@ -1974,6 +1974,10 @@ static const menuitem_t menu_back[] = {
   { MT_NEXT,       0, NULL,             NULL } // sentinel
 };
 
+#ifdef __VNA_LORA_PROFILES__
+#include "vna_modules/vna_profiles.c"
+#endif
+
 #ifdef __USE_SD_CARD__
 #ifdef __SD_FILE_BROWSER__
 static const menuitem_t menu_sdcard_browse[] = {
@@ -2561,6 +2565,9 @@ const menuitem_t menu_config[] = {
 };
 
 const menuitem_t menu_top[] = {
+#ifdef __VNA_LORA_PROFILES__
+  { MT_SUBMENU, 0, "PROFILES",  menu_profiles },
+#endif
   { MT_SUBMENU, 0, "DISPLAY",   menu_display },
   { MT_SUBMENU, 0, "MARKER",    menu_marker },
   { MT_SUBMENU, 0, "STIMULUS",  menu_stimulus },
