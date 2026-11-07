@@ -71,6 +71,13 @@ void ui_splash(void) {
   lcd_set_foreground(LCD_GRID_COLOR);
   lcd_printf(x0, y, "NanoVNA-D (DiSlord) git %s", VERSION);
   lcd_printf(x0, y + FONT_STR_HEIGHT + 2, "Build " __DATE__ " " __TIME__);
+#ifdef __VNA_LORA_PROFILES__
+  uint32_t fpc;
+  if (fault_log_present(&fpc)) {                 // crash in the previous run (shell: fault)
+    lcd_set_foreground(LCD_LOW_BAT_COLOR);
+    lcd_printf(x0, 8, "Previous run crashed at PC 0x%08x - shell: fault", fpc);
+  }
+#endif
   lcd_set_foreground(LCD_FG_COLOR);
 #ifdef __VNA_LORA_PROFILES__
   if (lora_boot_asks() || lora_first_boot()) return;  // chooser (after ui_init) keeps the splash on screen

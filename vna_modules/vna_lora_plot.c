@@ -595,6 +595,29 @@ static int lora_text_w(const char *s, int size) {
   return w;
 }
 
+// Scaled glyph. lcd_drawchar_size() renders the whole glyph into spi_buffer (SPI_BUFFER_SIZE pixels:
+// 2048 on H4) before sending it: a bigger glyph (size 6: up to 42 x 66 px) overruns spi_buffer and the
+// end of RAM (HardFault). Those are drawn with lcd_fill() runs instead.
+static int lora_drawchar(uint8_t ch, int x, int y, int size) {
+  int w = FONT_GET_WIDTH(ch);
+  if (w * size * FONT_GET_HEIGHT * size <= SPI_BUFFER_SIZE) return lcd_drawchar_size(ch, x, y, size);
+  pixel_t fg = foreground_color, bg = background_color;
+  lcd_fill(x, y, w * size, FONT_GET_HEIGHT * size);            // background
+  background_color = fg;
+  const uint8_t *b = FONT_GET_DATA(ch);
+  for (int r = 0; r < FONT_GET_HEIGHT; r++) {
+    uint8_t bits = b[r];
+    for (int c = 0; c < w;) {
+      if (!(bits & (0x80 >> c))) {c++; continue;}
+      int c0 = c;
+      while (c < w && (bits & (0x80 >> c))) c++;
+      lcd_fill(x + c0 * size, y + r * size, (c - c0) * size, size);
+    }
+  }
+  background_color = bg;
+  return w * size;
+}
+
 // Text with scaled font, x < 0: centred
 static int lora_big(int x, int y, const char *s, int size, uint16_t fg_idx) {
   if (x < 0) x = (LCD_WIDTH - lora_text_w(s, size)) / 2;
@@ -607,7 +630,7 @@ static int lora_big(int x, int y, const char *s, int size, uint16_t fg_idx) {
       background_color = bg;
       x+= 3 * size;
     } else
-      x+= lcd_drawchar_size(*s, x, y, size);
+      x+= lora_drawchar(*s, x, y, size);
   }
   return x;
 }
@@ -893,7 +916,7 @@ static lora_cmp_t lora_cmp LORA_CCM;
 
 static float lora_s21_db(int i) {
   float p = get_l(measured[1][i][0], measured[1][i][1]);
-  return p > 1e-12f ? vna_log10f_x_10(p) : -120.0f;
+  return (p > 1e-12f && p < 1e12f) ? vna_log10f_x_10(p) : -120.0f;   // also NaN / Inf -> floor
 }
 
 void lora_cmp_start(const lora_tune_t *t) {
@@ -953,6 +976,7 @@ static lora_cmp_res_t lora_cmp_calc(void) {
   r.a = lora_cmp_band_avg(lora_cmp.a);
   r.b = lora_cmp_band_avg(lora_cmp.b);
   r.d = r.b - r.a;
+  if (!(r.d > -99.0f && r.d < 99.0f)) r.d = 0.0f;  // NaN guard for the formatter
   r.worst = 1e9f; r.best = -1e9f;
   for (int i = 0; i < LORA_CMP_POINTS && i < sweep_points; i++) {
     freq_t f = getFrequency(i);
@@ -1001,8 +1025,9 @@ static void lora_cmp_static(void) {
 
 static void lora_cmp_draw(void) {
   char buf[64];
+  int n = sweep_points < LORA_CMP_POINTS ? sweep_points : LORA_CMP_POINTS;
   if (lora_cmp.state == LORA_CMP_ASK_A) {          // live level, helps to check the setup
-    for (int i = 0; i < LORA_CMP_POINTS; i++) lora_cmp.b[i] = lora_s21_db(i);
+    for (int i = 0; i < n; i++) lora_cmp.b[i] = lora_s21_db(i);
     float l = lora_cmp_band_avg(lora_cmp.b);
     lcd_set_colors(LCD_FG_COLOR, LCD_BG_COLOR);
     lcd_fill(0, 200, LCD_WIDTH, 2 * FONT_GET_HEIGHT + FONT_STR_HEIGHT + 4);
@@ -1012,9 +1037,9 @@ static void lora_cmp_draw(void) {
     return;
   }
   if (lora_cmp.state == LORA_CMP_STORING) {
-    for (int i = 0; i < LORA_CMP_POINTS; i++) lora_cmp.a[i]+= lora_s21_db(i);
+    for (int i = 0; i < n; i++) lora_cmp.a[i]+= lora_s21_db(i);
     if (++lora_cmp.count >= LORA_CMP_STORE_N) {
-      for (int i = 0; i < LORA_CMP_POINTS; i++) lora_cmp.a[i]/= LORA_CMP_STORE_N;
+      for (int i = 0; i < n; i++) lora_cmp.a[i]/= LORA_CMP_STORE_N;
       lora_cmp.a_valid = true; lora_cmp.a_f0 = frequency0; lora_cmp.a_f1 = frequency1;
       lora_cmp.state = LORA_CMP_LIVE; lora_cmp.b_init = false;
       lora_cmp_static();
@@ -1022,7 +1047,7 @@ static void lora_cmp_draw(void) {
     return;
   }
   // LIVE: smoothed B
-  for (int i = 0; i < LORA_CMP_POINTS; i++) {
+  for (int i = 0; i < n; i++) {
     float v = lora_s21_db(i);
     lora_cmp.b[i] = lora_cmp.b_init ? 0.6f * lora_cmp.b[i] + 0.4f * v : v;
   }
@@ -1056,7 +1081,7 @@ static void lora_cmp_draw(void) {
   int px = 0, py = 0;
   for (int i = 0; i < LORA_CMP_POINTS && i < sweep_points; i++) {
     float d = lora_cmp.b[i] - lora_cmp.a[i];
-    if (d > 6.0f) d = 6.0f; else if (d < -6.0f) d = -6.0f;
+    if (!(d > -6.0f)) d = -6.0f; else if (d > 6.0f) d = 6.0f;   // NaN -> -6
     int yy = sy + sh / 2 - (int)(d * (sh / 12.0f));
     int xx = sx + i * sw / (sweep_points - 1);
     if (i) {lcd_line(px, py, xx, yy); lcd_line(px, py + 1, xx, yy + 1);}

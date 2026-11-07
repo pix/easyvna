@@ -1493,6 +1493,8 @@ void  lora_bar_toggle(void);                   // hide / show the action bar (RA
 void  lora_bar_hide(bool hide);
 #define LORA_TAB_W 40                          // touch width of the "show bar" tab (bottom left)
 bool  lora_bar_visible(void);
+// main.c: HardFault log from the previous run (CCM, survives the reset), true if present
+bool  fault_log_present(uint32_t *pc);
 // main.c: run shell commands queued for the sweep thread (modal screens keep 'capture' working)
 void  shell_poll_pending(void);
 // New buffers live in CCM RAM (CPU only, no DMA), zeroed at startup

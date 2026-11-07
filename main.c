@@ -2936,6 +2936,9 @@ typedef struct {
 // LoRa antenna profiles shell command (implemented in vna_modules/vna_profiles.c)
 void cmd_profile(int argc, char *argv[]);
 #endif
+#if defined(NANOVNA_F303) && !defined(ENABLE_HARD_FAULT_HANDLER_DEBUG)
+static void cmd_fault(int argc, char *argv[]);
+#endif
 static const VNAShellCommand commands[] =
 {
     {"scan"        , cmd_scan        , CMD_WAIT_MUTEX|CMD_BREAK_SWEEP},
@@ -2994,6 +2997,9 @@ static const VNAShellCommand commands[] =
     {"recall"      , cmd_recall      , CMD_WAIT_MUTEX|CMD_BREAK_SWEEP|CMD_RUN_IN_UI|CMD_RUN_IN_LOAD},
 #ifdef __VNA_LORA_PROFILES__
     {"profile"     , cmd_profile     , CMD_WAIT_MUTEX|CMD_BREAK_SWEEP|CMD_RUN_IN_LOAD},
+#endif
+#if defined(NANOVNA_F303) && !defined(ENABLE_HARD_FAULT_HANDLER_DEBUG)
+    {"fault"       , cmd_fault       , 0},
 #endif
     {"trace"       , cmd_trace       , CMD_RUN_IN_LOAD},
     {"marker"      , cmd_marker      , CMD_RUN_IN_LOAD},
@@ -3463,6 +3469,55 @@ int main(void)
   }
 }
 
+#if defined(NANOVNA_F303) && !defined(ENABLE_HARD_FAULT_HANDLER_DEBUG)
+/*
+ * Field crash log (PiX's fork): on a HardFault store the stacked PC/LR/xPSR and the fault status
+ * registers in CCM RAM (not cleared at startup) and reset, instead of hanging with a dead USB.
+ * Shell 'fault' prints it after the reboot ('fault clear' clears), the splash shows a red line.
+ */
+#define FAULT_MAGIC 0xFA017ED5U
+typedef struct {uint32_t magic, pc, lr, psr, cfsr, hfsr, bfar, mmfar, sp, exc;} fault_log_t;
+fault_log_t fault_log __attribute__((section(".ram4")));
+
+void HardFault_Handler(void) __attribute__((naked));
+void hard_fault_log(uint32_t *sp, uint32_t exc_return) __attribute__((used, noreturn));
+
+void HardFault_Handler(void) {
+  __asm volatile("tst   lr, #4             \n"
+                 "ite   eq                 \n"
+                 "mrseq r0, msp            \n"
+                 "mrsne r0, psp            \n"
+                 "mov   r1, lr             \n"
+                 "b     hard_fault_log     \n");
+}
+
+void hard_fault_log(uint32_t *sp, uint32_t exc_return) {
+  fault_log.sp = (uint32_t)sp; fault_log.exc = exc_return;
+  bool sp_ok = (uint32_t)sp >= 0x20000000U && (uint32_t)sp <= 0x2000A000U - 32;   // stacks are in SRAM
+  fault_log.pc  = sp_ok ? sp[6] : 0;
+  fault_log.lr  = sp_ok ? sp[5] : 0;
+  fault_log.psr = sp_ok ? sp[7] : 0;
+  fault_log.cfsr = SCB->CFSR; fault_log.hfsr = SCB->HFSR;
+  fault_log.bfar = SCB->BFAR; fault_log.mmfar = SCB->MMFAR;
+  fault_log.magic = FAULT_MAGIC;
+  NVIC_SystemReset();
+  while (1);
+}
+
+bool fault_log_present(uint32_t *pc) {
+  if (fault_log.magic != FAULT_MAGIC) return false;
+  if (pc) *pc = fault_log.pc;
+  return true;
+}
+
+VNA_SHELL_FUNCTION(cmd_fault)
+{
+  if (argc == 1 && get_str_index(argv[0], "clear") == 0) {fault_log.magic = 0; shell_printf("fault none" VNA_SHELL_NEWLINE_STR); return;}
+  if (fault_log.magic != FAULT_MAGIC) {shell_printf("fault none" VNA_SHELL_NEWLINE_STR); return;}
+  shell_printf("fault pc 0x%08x lr 0x%08x psr 0x%08x cfsr 0x%08x hfsr 0x%08x bfar 0x%08x mmfar 0x%08x sp 0x%08x exc 0x%08x" VNA_SHELL_NEWLINE_STR,
+               fault_log.pc, fault_log.lr, fault_log.psr, fault_log.cfsr, fault_log.hfsr, fault_log.bfar, fault_log.mmfar, fault_log.sp, fault_log.exc);
+}
+#else
 /* The prototype shows it is a naked function - in effect this is just an
 assembly function. */
 void HardFault_Handler(void);
@@ -3524,6 +3579,7 @@ void hard_fault_handler_c(uint32_t *sp)
   while (true) {
   }
 }
+#endif
 // For new compilers
 //void _exit(int x){(void)x;}
 //void _kill(void){}
