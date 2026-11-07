@@ -1073,6 +1073,9 @@ static uint8_t data_update = 0;
 
 // Include measure functions
 #include "measure.c"
+#ifdef __VNA_LORA_PROFILES__
+#include "vna_modules/vna_lora_plot.c"
+#endif
 
 static const struct {
   uint8_t option;
@@ -1095,6 +1098,9 @@ static const struct {
 #endif
 #ifdef __S11_RESONANCE_MEASURE__
   [MEASURE_S11_RESONANCE]= {MESAURE_S11, MEASURE_UPD_ALL,  draw_s11_resonance, prepare_s11_resonance},
+#endif
+#ifdef __VNA_LORA_PROFILES__
+  [MEASURE_LORA_INFO]   = {MESAURE_S11, MEASURE_UPD_SWEEP,   draw_lora_info, prepare_lora_info},
 #endif
 };
 
@@ -1186,6 +1192,9 @@ static void plot_into_index(void) {
   // Mark old markers for erase
   markmap_all_markers();
 //  START_PROFILE;
+#ifdef __VNA_LORA_PROFILES__
+  lora_autoscale();
+#endif
   // Cache trace data indexes, and mark plot area for update
   for (int t = 0; t < TRACES_MAX; t++)
     if (trace[t].enabled)
@@ -1650,6 +1659,16 @@ static void draw_cal_status(void) {
     lcd_drawstring(x, y, c);
     lcd_set_foreground(LCD_FG_COLOR);
   }
+#ifdef __VNA_LORA_PROFILES__
+  // Active LoRa profile without matching calibration: red "NC" (no cal) in place of 'Cn'
+  bool lora_cal_ok;
+  if (lora_profile_title(NULL, &lora_cal_ok) && !lora_cal_ok) {
+    lcd_set_foreground(LCD_LOW_BAT_COLOR);
+    lcd_fill(x, y, OFFSETX - x, sFONT_STR_HEIGHT);
+    lcd_drawstring(x, y, "NC");
+    lcd_set_foreground(LCD_FG_COLOR);
+  }
+#endif
 
   static const struct {char text, zero; uint16_t mask;} calibration_text[]={
     {'O', 0, CALSTAT_OPEN},

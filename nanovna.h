@@ -88,6 +88,10 @@
 //#define __VNA_Z_RENORMALIZATION__
 // Add quick antenna profiles (LoRa bands) and quick S11 calibration menu (vna_modules/vna_profiles.c)
 #define __VNA_LORA_PROFILES__
+// Boot splash screen (vna_modules/vna_splash.c), H4 only (NanoVNA-H F072 flash is full)
+#ifdef NANOVNA_F303
+#define __VNA_SPLASH__
+#endif
 
 /*
  * Submodules defines
@@ -969,6 +973,9 @@ enum {
 #ifdef __S11_RESONANCE_MEASURE__
   MEASURE_S11_RESONANCE,
 #endif
+#ifdef __VNA_LORA_PROFILES__
+  MEASURE_LORA_INFO,
+#endif
   MEASURE_END
 };
 #endif
@@ -1415,6 +1422,19 @@ void ui_touch_draw_test(void);
 void ui_enter_dfu(void);
 
 void ui_message_box(const char *header, const char *text, uint32_t delay);
+
+#ifdef __VNA_SPLASH__
+void ui_splash(void);
+#endif
+#ifdef __VNA_LORA_PROFILES__
+// vna_modules/vna_profiles.c (ui.c): active profile title (NULL if sweep range is not a profile),
+// target (band centre, 0 for none) and whether the applied calibration matches the profile
+const char *lora_profile_title(freq_t *target, bool *cal_ok);
+// Power on: chooser on splash (or silent) + apply last used profile/custom, call after ui_init()
+void lora_profile_boot(void);
+// vna_modules/vna_lora_plot.c (plot.c): autoscale enable bit per trace
+extern uint8_t lora_autoscale_mask;
+#endif
 
 // Irq operation process set
 #define OP_NONE       0x00

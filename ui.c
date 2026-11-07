@@ -1977,6 +1977,9 @@ static const menuitem_t menu_back[] = {
 #ifdef __VNA_LORA_PROFILES__
 #include "vna_modules/vna_profiles.c"
 #endif
+#ifdef __VNA_SPLASH__
+#include "vna_modules/vna_splash.c"
+#endif
 
 #ifdef __USE_SD_CARD__
 #ifdef __SD_FILE_BROWSER__
@@ -2393,6 +2396,9 @@ const menuitem_t menu_measure[] = {
 #ifdef __S11_RESONANCE_MEASURE__
   { MT_ADV_CALLBACK, MEASURE_S11_RESONANCE,"RESONANCE\n (S11)", menu_measure_acb },
 #endif
+#ifdef __VNA_LORA_PROFILES__
+  { MT_ADV_CALLBACK, MEASURE_LORA_INFO,   "LORA INFO\n (S11)", menu_measure_acb },
+#endif
 #ifdef __S21_MEASURE__
   { MT_ADV_CALLBACK, MEASURE_SHUNT_LC,    "SHUNT LC\n (S21)",   menu_measure_acb },
   { MT_ADV_CALLBACK, MEASURE_SERIES_LC,   "SERIES LC\n (S21)",  menu_measure_acb },
@@ -2419,6 +2425,9 @@ const menuitem_t *menu_measure_list[] = {
 #endif
 #ifdef __S11_RESONANCE_MEASURE__
   [MEASURE_S11_RESONANCE] = menu_measure_resonance,
+#endif
+#ifdef __VNA_LORA_PROFILES__
+  [MEASURE_LORA_INFO] = menu_measure,
 #endif
 };
 #endif

@@ -147,6 +147,9 @@ const char *info_about[]={
   "Architecture: " PORT_ARCHITECTURE_NAME " Core Variant: " PORT_CORE_VARIANT_NAME,
 //  "Port Info: " PORT_INFO,
   "Platform: " PLATFORM_NAME,
+#ifdef __VNA_LORA_PROFILES__
+  "Fork: PiX (LoRa profiles, quick cal, autoscale, splash)",
+#endif
   0 // sentinel
 };
 
@@ -235,6 +238,10 @@ static THD_FUNCTION(Thread1, arg)
  * UI (menu, touch, buttons) and plot initialize
  */
   ui_init();
+#ifdef __VNA_LORA_PROFILES__
+  // Power on profile chooser / re-apply last used profile (needs buttons/touch from ui_init)
+  lora_profile_boot();
+#endif
   //Initialize graph plotting
   plot_init();
   while (1) {
@@ -2135,6 +2142,9 @@ void set_active_trace(int t) {
 void set_trace_scale(int t, float scale)
 {
   if (trace[t].scale != scale) {
+#ifdef __VNA_LORA_PROFILES__
+    lora_autoscale_mask&= ~(1<<t);  // manual scale change disables autoscale for this trace
+#endif
     trace[t].scale = scale;
     request_to_redraw(REDRAW_MARKER | REDRAW_GRID_VALUE | REDRAW_PLOT);
   }
@@ -2143,6 +2153,9 @@ void set_trace_scale(int t, float scale)
 void set_trace_refpos(int t, float refpos)
 {
   if (trace[t].refpos != refpos) {
+#ifdef __VNA_LORA_PROFILES__
+    lora_autoscale_mask&= ~(1<<t);  // manual ref change disables autoscale for this trace
+#endif
     trace[t].refpos = refpos;
     request_to_redraw(REDRAW_REFERENCE | REDRAW_GRID_VALUE | REDRAW_PLOT);
   }
@@ -3388,6 +3401,9 @@ int main(void)
  * SPI bus and LCD Initialize
  */
   lcd_init();
+#ifdef __VNA_SPLASH__
+  ui_splash();
+#endif
 
 /*
  * tlv320aic Initialize (audio codec)
