@@ -500,7 +500,7 @@ static uint32_t lora_near_band(float f) {
 //=====================================================================================================
 // REF: S11 reference (|G|^2 per point + results), RAM only (CCM), drawn dim grey in the stored trace slot
 //=====================================================================================================
-#define LORA_REF_COLOR RGB565(120,120,120)
+#define LORA_REF_COLOR RGB565(130,190,255)        // REF curve: light blue, dashed, 2 px, over the grid
 typedef struct {
   freq_t   f0, f1;
   uint16_t points;
@@ -559,6 +559,7 @@ static void lora_ref_into_index(void) {
   lora_ref.shown = true;
 #endif
 }
+
 
 //=====================================================================================================
 // Toast: 1 s message over the plot (profile screen)

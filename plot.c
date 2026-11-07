@@ -1508,14 +1508,21 @@ static void draw_cell(int x0, int y0) {
       search_index_range_x(x0, x0 + w, index, &i0, &i1);
     c = GET_PALETTE_COLOR(LCD_TRACE_1_COLOR + t);
 #ifdef __VNA_LORA_PROFILES__
-    if (t >= TRACES_MAX && lora_screen_on) c = LORA_REF_COLOR;   // REF curve: dim grey
+    bool lora_ref = t >= TRACES_MAX && lora_screen_on;
+    if (lora_ref) c = LORA_REF_COLOR;                  // REF curve: light blue, dashed, 2 px
 #endif
     for (int i = i0; i < i1; i++) {
+#ifdef __VNA_LORA_PROFILES__
+      if (lora_ref && ((i >> 2) & 1)) continue;
+#endif
       int x1 = index[i].x - x0;
       int y1 = index[i].y - y0;
       int x2 = index[i + 1].x - x0;
       int y2 = index[i + 1].y - y0;
       cell_drawline(x1, y1, x2, y2, c);
+#ifdef __VNA_LORA_PROFILES__
+      if (lora_ref) cell_drawline(x1, y1 + 1, x2, y2 + 1, c);
+#endif
 #ifdef __VNA_LORA_PROFILES__
       if (t == 0 && lora_screen_on) {        // profile screen: bold SWR trace
         cell_drawline(x1, y1 + 1, x2, y2 + 1, c);
