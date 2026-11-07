@@ -138,6 +138,13 @@ The QUICK CAL wizard and the touch / jog handling (double-tap timing, long press
 tried on that single unit. The HOLD motion threshold and the SURVEY / LOSSY thresholds were set from
 a few real sweeps and may need adjusting for other antennas.
 
+## License
+
+The firmware as a whole is GPL-3.0 (inherited from NanoVNA-D), see [LICENSE](LICENSE).
+EasyVNA's own new files (`vna_modules/vna_profiles.c`, `vna_lora_plot.c`, `vna_lora_screens.c`,
+`vna_splash.c`) are BSD-3-Clause (see their headers and [LICENSE-BSD](LICENSE-BSD)) and can be
+reused under BSD on their own. EasyVNA changes to upstream files keep the upstream GPL headers.
+
 ## Credits
 
 - [DiSlord](https://github.com/DiSlord/NanoVNA-D): NanoVNA-D firmware, which EasyVNA is built on.
