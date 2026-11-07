@@ -1446,6 +1446,7 @@ bool lora_screen_active(void);
 bool lora_marker_shown(int t);
 bool lora_info_rect(int *x, int *y, int *w, int *h);
 void lora_info_place(int x, int y);
+bool lora_info_moved(void);
 // Power on: chooser on splash (or silent) + apply last used profile/custom, call after ui_init()
 void lora_profile_boot(void);
 // vna_modules/vna_lora_plot.c (plot.c): autoscale enable bit per trace

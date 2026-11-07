@@ -73,7 +73,7 @@ void ui_splash(void) {
   lcd_printf(x0, y + FONT_STR_HEIGHT + 2, "Build " __DATE__ " " __TIME__);
   lcd_set_foreground(LCD_FG_COLOR);
 #ifdef __VNA_LORA_PROFILES__
-  if (lora_boot_asks()) return;  // chooser (after ui_init) keeps the splash on screen
+  if (lora_boot_asks() || lora_first_boot()) return;  // chooser (after ui_init) keeps the splash on screen
 #endif
   chThdSleepMilliseconds(SPLASH_TIME_MS);
 }

@@ -19,6 +19,8 @@
  *   - last used profile/custom is stored in config. At power on a chooser on the
  *     splash screen preselects it and starts it after 3 s (jog/touch to pick another);
  *     OPTIONS > ASK AT POWER ON off = start the last one without asking.
+ *     First boot (nothing chosen yet, or first boot of a newly flashed firmware: build
+ *     stamp in config differs) the chooser is always shown and waits for a choice.
  * QUICK CAL menu:
  *   - OPEN -> SHORT -> LOAD -> DONE; DONE saves to the slot of the profile whose
  *     range matches the calibration range (or keeps the cal in RAM only).
@@ -80,6 +82,10 @@ enum {LORA_VIEW_RL = 0, LORA_VIEW_SMITH, LORA_VIEW_ALL, LORA_VIEW_COUNT};
 static const uint8_t lora_view_traces[LORA_VIEW_COUNT] = {0x03, 0x09, 0x0F};
 static const char *lora_view_names[LORA_VIEW_COUNT]    = {"SWR+RL", "SWR+SMITH", "ALL"};
 #define LORA_VIEW_SHELL    "rl|smith|all"
+// Build stamp of the firmware that last stored a power on choice (spare config bytes 1..2):
+// differs after flashing a new build -> first boot -> chooser waits for the user
+#define lora_cfg_stamp_lo  config._reserved[1]
+#define lora_cfg_stamp_hi  config._reserved[2]
 
 #if SAVEAREA_MAX < 5
 #error "LoRa profiles need at least 5 save slots"
@@ -246,7 +252,7 @@ static void lora_select(int idx, bool remember) {
 //  - touch: only M1 can be dragged (-> FREE); the info block can be dragged anywhere in the plot
 //    (position saved once on release), a tap on a moved block puts it back to automatic placement
 //=====================================================================================================
-#define lora_box_moved()   (config._reserved[1] != 0)   // see vna_lora_plot.c
+#define lora_box_moved()   lora_info_moved()
 
 static void lora_m1_track(bool on) {
   markers[0].enabled = TRUE;
@@ -290,10 +296,9 @@ static bool lora_touch_info(int tx, int ty) {
       chThdSleepMilliseconds(20);
   } while (touch_check() != EVT_TOUCH_RELEASED);
   if (moved)
-    config_save();                    // one flash write per drag
+    ;                                 // position kept for this session
   else if (lora_box_moved()) {        // tap on a moved block: automatic placement again
     lora_info_place(-1, 0);
-    config_save();
     request_to_redraw(REDRAW_CELLS);
   } else
     ui_mode_menu();                   // tap on the block: same as a tap elsewhere on the plot
@@ -311,6 +316,23 @@ static bool lora_touch_info(int tx, int ty) {
 #define BOOT_CHOICES     (LORA_PROFILE_COUNT + 1)
 #define BOOT_BTN_W       ((LCD_WIDTH - 2 * 8 - (BOOT_CHOICES - 1) * BOOT_BTN_GAP) / BOOT_CHOICES)
 
+// 16 bit stamp of this build (git version + build time), never 0
+static uint16_t lora_build_stamp(void) {
+  static const char id[] = VERSION " " __DATE__ " " __TIME__;
+  uint32_t h = 2166136261U;                        // FNV-1a
+  for (const char *p = id; *p; p++) h = (h ^ (uint8_t)*p) * 16777619U;
+  h = (h ^ (h >> 16)) & 0xFFFF;
+  return h ? h : 1;
+}
+
+// First boot: no power on choice stored yet, or stored by another firmware build
+static bool lora_first_boot(void) {
+  int last = (lora_cfg & 0x0F) - 1;
+  return last < 0 || last > LORA_CUSTOM
+      || (lora_cfg_stamp_lo | (lora_cfg_stamp_hi << 8)) != lora_build_stamp();
+}
+
+// secs < 0: no countdown (first boot, wait for a choice)
 static void lora_boot_draw(int sel, int secs) {
   static const char *names[BOOT_CHOICES] = {"WIDE", "433", "869", "915", "CUSTOM"};
   for (int i = 0; i < BOOT_CHOICES; i++) {
@@ -328,22 +350,25 @@ static void lora_boot_draw(int sel, int secs) {
   }
   lcd_set_colors(LCD_FG_COLOR, LCD_BG_COLOR);
   lcd_fill(0, BOOT_TEXT_Y, LCD_WIDTH, FONT_STR_HEIGHT);
-  lcd_printf(8, BOOT_TEXT_Y, "Starting %s in %ds - jog/touch to choose", names[sel], secs);
+  if (secs < 0)
+    lcd_printf(8, BOOT_TEXT_Y, "First start: choose a mode (jog + push, or touch)");
+  else
+    lcd_printf(8, BOOT_TEXT_Y, "Starting %s in %ds - jog/touch to choose", names[sel], secs);
 }
 
 // Never blocks forever: auto start after 3 s, jog movement restarts a 5 s countdown,
 // jog push or touch on a button starts at once (touch elsewhere is ignored)
-static int lora_boot_ask(int sel) {
+static int lora_boot_ask(int sel, bool wait) {
   int ticks = BOOT_ASK_TICKS;
   btn_check(); touch_check();                       // sync button/touch state
-  lora_boot_draw(sel, ticks / 10);
+  lora_boot_draw(sel, wait ? -1 : ticks / 10);
   while (ticks > 0) {
     uint16_t ev = btn_check();
     if (ev & EVT_BUTTON_SINGLE_CLICK) break;
     if (ev & (EVT_UP | EVT_DOWN)) {
       sel = (sel + ((ev & EVT_UP) ? 1 : BOOT_CHOICES - 1)) % BOOT_CHOICES;
       ticks = 50;
-      lora_boot_draw(sel, ticks / 10);
+      lora_boot_draw(sel, wait ? -1 : ticks / 10);
     }
     if (touch_check() == EVT_TOUCH_PRESSED) {
       int tx, ty;
@@ -352,11 +377,12 @@ static int lora_boot_ask(int sel) {
       int i = (tx - 8) / (BOOT_BTN_W + BOOT_BTN_GAP);
       if (ty >= BOOT_BTN_Y && ty < BOOT_BTN_Y + BOOT_BTN_H && tx >= 8 && i < BOOT_CHOICES) {
         sel = i;
-        lora_boot_draw(sel, 0);
+        lora_boot_draw(sel, wait ? -1 : 0);
         break;
       }
     }
     chThdSleepMilliseconds(100);
+    if (wait) continue;                             // first boot: no timeout
     if (--ticks % 10 == 0) lora_boot_draw(sel, ticks / 10);
   }
   operation_requested = OP_NONE;                    // drop events collected while choosing
@@ -367,9 +393,16 @@ static bool lora_boot_asks(void) {return !(lora_cfg & LORA_CFG_NO_ASK);}
 
 void lora_profile_boot(void) {
   int last = (lora_cfg & 0x0F) - 1;
-  if (last < 0 || last > LORA_CUSTOM) last = LORA_CUSTOM;   // first start: stock settings
-  if (lora_boot_asks())
-    last = lora_boot_ask(last);
+  bool first = lora_first_boot();
+  if (last < 0 || last > LORA_CUSTOM) last = LORA_CUSTOM;   // nothing chosen yet: preselect CUSTOM
+  if (first || lora_boot_asks())
+    last = lora_boot_ask(last, first);
+  if (first) {                                              // store choice + build stamp once
+    uint16_t stamp = lora_build_stamp();
+    lora_cfg_stamp_lo = stamp & 0xFF;
+    lora_cfg_stamp_hi = stamp >> 8;
+    lora_cfg&= ~0x0F;                                       // force lora_remember() to save
+  }
   lora_select(last, true);
 }
 
@@ -561,7 +594,6 @@ static UI_FUNCTION_ADV_CALLBACK(menu_lora_box_auto_acb) {
   }
   if (!lora_box_moved()) return;
   lora_info_place(-1, 0);
-  config_save();
   request_to_redraw(REDRAW_AREA);
 }
 

@@ -382,9 +382,10 @@ static int lora_box_score(int bx, int by, int bh) {
   return n;
 }
 
-// Info block moved by hand: position in spare config bytes (x/2, y/2), x byte 0 = auto placement
-#define lora_box_cfg_x   config._reserved[1]
-#define lora_box_cfg_y   config._reserved[2]
+// Info block moved by hand: position for this session (x/2, y/2), x 0 = auto placement
+// (the spare config bytes hold the firmware build stamp for the first boot chooser)
+static uint8_t lora_box_cfg_x, lora_box_cfg_y;
+bool lora_info_moved(void) {return lora_box_cfg_x != 0;}
 
 static void lora_box_clamp(int *x, int *y) {
   if (*x > CELLOFFSETX + WIDTH - LORA_BOX_W) *x = CELLOFFSETX + WIDTH - LORA_BOX_W;
@@ -422,8 +423,7 @@ bool lora_info_rect(int *x, int *y, int *w, int *h) {
   return true;
 }
 
-// ui.c side: move the info block by hand (area coordinates, clamped), x < 0 = back to auto placement.
-// Only RAM config is changed here, the caller saves it.
+// ui.c side: move the info block by hand (area coordinates, clamped), x < 0 = back to auto placement
 void lora_info_place(int x, int y) {
   if (x < 0) lora_box_cfg_x = 0;
   else {
