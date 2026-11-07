@@ -144,6 +144,10 @@ static void lora_height_update(void) {
   if (h == lora_plot_height) return;
   lora_plot_height = h;
   area_height = AREA_HEIGHT_NORMAL;
+  if (h == LORA_HEIGHT_FULL) {                    // left margin is not a plot cell: clear the old bar there
+    lcd_set_background(LCD_BG_COLOR);
+    lcd_fill(0, OFFSETY + LORA_HEIGHT_BAR + 1, OFFSETX, LORA_HEIGHT_FULL - LORA_HEIGHT_BAR + 1);
+  }
   lora_screen_update();                           // band columns / guides with the new height
   redraw_request|= REDRAW_PLOT | REDRAW_AREA | REDRAW_FREQUENCY | REDRAW_CAL_STATUS | REDRAW_BATTERY;
 }

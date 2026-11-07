@@ -149,6 +149,7 @@ const char *info_about[]={
   "Platform: " PLATFORM_NAME,
 #ifdef __VNA_LORA_PROFILES__
   "Fork: EasyVNA by PiX (LoRa profiles, quick cal, tune, ref, hold, S21 compare)",
+  "Credits: PiX and the Claude, OpenAI and Deepseek AI band",
   "Fork source: https://github.com/pix/easyvna (based on NanoVNA-D)",
 #endif
   0 // sentinel

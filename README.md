@@ -2,7 +2,8 @@ EasyVNA
 =======
 
 **One-tap LoRa antenna tuning (433 / 869 / 915 MHz) for the NanoVNA-H4.**
-A firmware fork of [DiSlord's NanoVNA-D](https://github.com/DiSlord/NanoVNA-D).
+A firmware fork of [DiSlord's NanoVNA-D](https://github.com/DiSlord/NanoVNA-D),
+by PiX (and the Claude, OpenAI and Deepseek AI band).
 
 | | |
 |:---:|:---:|
@@ -142,7 +143,7 @@ a few real sweeps and may need adjusting for other antennas.
 - [DiSlord](https://github.com/DiSlord/NanoVNA-D): NanoVNA-D firmware, which EasyVNA is built on.
 - [edy555](https://github.com/ttrftech/NanoVNA): the original NanoVNA and its firmware.
 - hugen79: NanoVNA-H / H4 hardware.
-- EasyVNA by PiX, developed with Claude (Anthropic).
+- EasyVNA by PiX (and the Claude, OpenAI and Deepseek AI band).
 
 ---
 

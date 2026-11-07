@@ -39,7 +39,9 @@ void ui_splash(void) {
   splash_text(y, "EasyVNA", 4, LCD_TRACE_1_COLOR);
   y += FONT_GET_HEIGHT * 4 + LCD_HEIGHT / 32;
   splash_text(y, "by PiX", 2, LCD_TRACE_2_COLOR);
-  y += FONT_GET_HEIGHT * 2 + LCD_HEIGHT / 24;
+  y += FONT_GET_HEIGHT * 2 + 2;
+  splash_text(y, "(and the Claude, OpenAI and Deepseek AI band)", 1, LCD_TRACE_2_COLOR);
+  y += FONT_GET_HEIGHT + LCD_HEIGHT / 24;
 
   // Stylized S11 dip: grid line, band edges, SWR-like resonance curve
   const int x0 = LCD_WIDTH / 10, w = LCD_WIDTH - 2 * x0;
