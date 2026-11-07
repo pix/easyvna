@@ -148,7 +148,8 @@ const char *info_about[]={
 //  "Port Info: " PORT_INFO,
   "Platform: " PLATFORM_NAME,
 #ifdef __VNA_LORA_PROFILES__
-  "Fork: PiX (LoRa profiles, quick cal, autoscale, splash)",
+  "Fork: EasyVNA by PiX (LoRa profiles, quick cal, tune, ref, hold, S21 compare)",
+  "Fork source: https://github.com/pix/easyvna (based on NanoVNA-D)",
 #endif
   0 // sentinel
 };
@@ -3471,7 +3472,7 @@ int main(void)
 
 #if defined(NANOVNA_F303) && !defined(ENABLE_HARD_FAULT_HANDLER_DEBUG)
 /*
- * Field crash log (PiX's fork): on a HardFault store the stacked PC/LR/xPSR and the fault status
+ * Field crash log (EasyVNA): on a HardFault store the stacked PC/LR/xPSR and the fault status
  * registers in CCM RAM (not cleared at startup) and reset, instead of hanging with a dead USB.
  * Shell 'fault' prints it after the reboot ('fault clear' clears), the splash shows a red line.
  */

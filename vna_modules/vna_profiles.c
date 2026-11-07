@@ -29,7 +29,8 @@
  *   - "profile view [rl|smith|all]"  show / set the profile VIEW (SWR+RL, SWR+Smith, all)
  *   - "profile info"         res/bw/q/worst/flag/dip/ref/tune lines (see vna_lora_plot.c)
  *   - "profile ref [store|clear]", "profile tune [on|off]", "profile hold [on|off|data]",
- *     "profile compare [on|store|new|off]"
+ *     "profile compare [on|store|new|off]", "profile bar [show|hide]"
+ *   - "profile <name>" while a chooser (power on / PROFILE) is open answers the chooser
  *
  * This is free software; you can redistribute it and/or modify it under the
  * terms of the GNU General Public License as published by the Free Software
@@ -399,6 +400,10 @@ static void lora_choices(lora_choice_t *c) {
 
 // Modal chooser. layout 0: boot row, auto start after 3 s unless wait; layout 1: full screen,
 // waits, CANCEL possible. Returns the choice (profile index or LORA_CUSTOM), -1 = cancel
+// A 'profile <name>' shell command while a chooser is open answers it (see cmd_profile)
+static bool   lora_in_chooser = false;
+static int8_t lora_shell_pick = -1;
+
 static int lora_choose(int layout, int sel, bool wait) {
   lora_choice_t c[LORA_CH_N];
   lora_choices(c);
@@ -423,7 +428,11 @@ static int lora_choose(int layout, int sel, bool wait) {
       if (h >= 0) {lora_scr_choice_button(layout, d, &c[d], false); d = h; lora_scr_choice_button(layout, d, &c[d], true); break;}
       if (h == -2) {d = -1; break;}
     }
-    shell_poll_pending();                           // keep 'capture' working
+    lora_in_chooser = true;
+    lora_shell_pick = -1;
+    shell_poll_pending();                           // keep 'capture' working, 'profile <name>' answers
+    lora_in_chooser = false;
+    if (lora_shell_pick >= 0) {operation_requested = OP_NONE; return lora_shell_pick;}
     chThdSleepMilliseconds(100);
     if (!timeout) continue;
     if (--ticks <= 0) break;
@@ -881,13 +890,27 @@ void cmd_profile(int argc, char *argv[]) {
     lora_info_print(LORA_PRINT_TUNE);
     return;
   }
+  if (get_str_index(argv[0], "bar") == 0) {
+    if (argc == 2) {
+      i = get_str_index(argv[1], "show|hide");
+      if (i < 0) goto usage;
+      lora_bar_hide(i == 1);
+    }
+    shell_printf("bar %s\r\n", lora_bar_visible() || !lora_screen_active() ? "show" : "hide");
+    return;
+  }
   if (argc == 1 && (i = get_str_index(argv[0], LORA_PROFILE_NAMES "|custom")) >= 0) {
+    if (lora_in_chooser) {                          // a chooser is open: answer it, it applies the choice
+      lora_shell_pick = i;
+      if (i < LORA_PROFILE_COUNT) lora_profile_print(i); else lora_custom_print();
+      return;
+    }
     lora_select(i, true);
     if (i < LORA_PROFILE_COUNT) lora_profile_print(i); else lora_custom_print();
     return;
   }
 usage:
   shell_printf("usage: profile [" LORA_PROFILE_NAMES "|custom] | profile view [" LORA_VIEW_SHELL "]\r\n"
-               "       profile info | ref [store|clear] | tune [on|off] | hold [on|off|data] | compare [on|store|new|off]\r\n");
+               "       profile info | ref [store|clear] | tune [on|off] | hold [on|off|data] | compare [on|store|new|off] | bar [show|hide]\r\n");
 }
 #endif // __VNA_LORA_PROFILES__

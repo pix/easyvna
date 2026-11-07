@@ -1,5 +1,5 @@
 /*
- * Boot splash screen (PiX's fork), included from ui.c, enabled by __VNA_SPLASH__
+ * Boot splash screen (EasyVNA by PiX), included from ui.c, enabled by __VNA_SPLASH__
  * Shown once after lcd_init(), before the sweep thread starts.
  *
  * This is free software; you can redistribute it and/or modify it under the
@@ -36,9 +36,9 @@ void ui_splash(void) {
   int y = LCD_HEIGHT / 16;
   splash_text(y, BOARD_NAME, 2, LCD_FG_COLOR);
   y += FONT_GET_HEIGHT * 2 + LCD_HEIGHT / 32;
-  splash_text(y, "PiX's fork", 4, LCD_TRACE_1_COLOR);
+  splash_text(y, "EasyVNA", 4, LCD_TRACE_1_COLOR);
   y += FONT_GET_HEIGHT * 4 + LCD_HEIGHT / 32;
-  splash_text(y, "LoRa antenna edition", 2, LCD_TRACE_2_COLOR);
+  splash_text(y, "LoRa antenna edition - by PiX", 2, LCD_TRACE_2_COLOR);
   y += FONT_GET_HEIGHT * 2 + LCD_HEIGHT / 24;
 
   // Stylized S11 dip: grid line, band edges, SWR-like resonance curve
@@ -69,8 +69,8 @@ void ui_splash(void) {
   // Version info at the bottom (power on profile chooser goes between graph and this)
   y = LCD_HEIGHT - 6 - 2 * (FONT_STR_HEIGHT + 2);
   lcd_set_foreground(LCD_GRID_COLOR);
-  lcd_printf(x0, y, "NanoVNA-D (DiSlord) git %s", VERSION);
-  lcd_printf(x0, y + FONT_STR_HEIGHT + 2, "Build " __DATE__ " " __TIME__);
+  lcd_printf(x0, y, "EasyVNA %s  build " __DATE__, VERSION);
+  lcd_printf(x0, y + FONT_STR_HEIGHT + 2, "based on NanoVNA-D by DiSlord (edy555, hugen79)");
 #ifdef __VNA_LORA_PROFILES__
   uint32_t fpc;
   if (fault_log_present(&fpc)) {                 // crash in the previous run (shell: fault)
