@@ -38,7 +38,7 @@ void ui_splash(void) {
   y += FONT_GET_HEIGHT * 2 + LCD_HEIGHT / 32;
   splash_text(y, "EasyVNA", 4, LCD_TRACE_1_COLOR);
   y += FONT_GET_HEIGHT * 4 + LCD_HEIGHT / 32;
-  splash_text(y, "LoRa antenna edition - by PiX", 2, LCD_TRACE_2_COLOR);
+  splash_text(y, "by PiX", 2, LCD_TRACE_2_COLOR);
   y += FONT_GET_HEIGHT * 2 + LCD_HEIGHT / 24;
 
   // Stylized S11 dip: grid line, band edges, SWR-like resonance curve

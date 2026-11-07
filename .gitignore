@@ -9,3 +9,6 @@ python
 TAGS
 .emacs-dirvars
 *png
+
+# EasyVNA README screenshots
+!doc/easyvna/*.png
