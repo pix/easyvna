@@ -2146,7 +2146,7 @@ VNA_SHELL_FUNCTION(cmd_save)
     request_to_redraw(REDRAW_CAL_STATUS);
     return;
   }
-  shell_printf("usage: %s 0..%d" VNA_SHELL_NEWLINE_STR, SAVEAREA_MAX-1, "save");
+  shell_printf("usage: %s 0..%d" VNA_SHELL_NEWLINE_STR, "save", SAVEAREA_MAX-1);
 }
 
 VNA_SHELL_FUNCTION(cmd_recall)
@@ -2157,7 +2157,7 @@ VNA_SHELL_FUNCTION(cmd_recall)
       shell_printf("Err, default load" VNA_SHELL_NEWLINE_STR);
     return;
   }
-  shell_printf("usage: %s 0..%d" VNA_SHELL_NEWLINE_STR, SAVEAREA_MAX-1, "recall");
+  shell_printf("usage: %s 0..%d" VNA_SHELL_NEWLINE_STR, "recall", SAVEAREA_MAX-1);
 }
 
 static const char * const trc_channel_name[] = {
