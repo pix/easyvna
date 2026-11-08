@@ -1124,7 +1124,7 @@ static audio_sample_t rx_buffer[AUDIO_BUFFER_LEN * 2];
 void i2s_lld_serve_rx_interrupt(uint32_t flags) {
 //if ((flags & (STM32_DMA_ISR_TCIF|STM32_DMA_ISR_HTIF)) == 0) return;
   uint16_t wait = wait_count;
-  if (wait == 0 || chVTGetSystemTimeX() < ready_time) return;
+  if (wait == 0 || (int32_t)(chVTGetSystemTimeX() - ready_time) < 0) return; // signed delta: safe across the 32-bit systime wrap (~11.9 h)
   uint16_t count = AUDIO_BUFFER_LEN;
   audio_sample_t *p = (flags & STM32_DMA_ISR_TCIF) ? rx_buffer + AUDIO_BUFFER_LEN : rx_buffer; // Full or Half transfer complete
   if (wait >= config._bandwidth+2)      // At this moment in buffer exist noise data, reset and wait next clean buffer
