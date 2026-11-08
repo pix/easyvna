@@ -1880,6 +1880,9 @@ static void ui_save_file(char *name, uint8_t format) {
   // Redraw use spi_buffer so need do it before any file ops
   if (ui_mode != UI_NORMAL && (file_opt[format].opt & FILE_OPT_REDRAW)) {
     ui_mode_normal();
+#ifdef __VNA_PAUSE_BANNER__
+    plot_set_pause_banner(PAUSE_BANNER_OFF);   // no banner in the screenshot (back on the next loop)
+#endif
     draw_all();
   }
 

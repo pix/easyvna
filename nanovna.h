@@ -93,6 +93,11 @@
 #define __VNA_LORA_PROFILES__
 #define __VNA_SPLASH__
 #endif
+// Banner over the plot while the device's own sweep is stopped: "PC CONTROL" (host 'scan' / 'data'
+// in the last 3 s) or "PAUSED" (menu / 'pause' / host gone without 'resume'), H4 only
+#ifdef NANOVNA_F303
+#define __VNA_PAUSE_BANNER__
+#endif
 
 /*
  * Submodules defines
@@ -353,6 +358,11 @@ inline void delayMilliseconds(uint32_t ms) {_delay_8t(ms*125*STM32_CORE_CLOCK);}
 
 void pause_sweep(void);
 void toggle_sweep(void);
+#ifdef __VNA_PAUSE_BANNER__
+// plot.c: sweep stopped banner, set by the sweep thread (main.c), redraws only on change
+enum {PAUSE_BANNER_OFF = 0, PAUSE_BANNER_PAUSED, PAUSE_BANNER_HOST};
+void plot_set_pause_banner(uint8_t state);
+#endif
 int  load_properties(uint32_t id);
 
 #ifdef __USE_BACKUP__

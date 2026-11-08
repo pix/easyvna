@@ -228,6 +228,42 @@ static void measurementDataSmooth(uint16_t ch_mask){
 #endif
 
 static THD_WORKING_AREA(waThread1, 1024);
+
+#ifdef __VNA_PAUSE_BANNER__
+//=====================================================================================================
+// Sweep stopped banner: "PC CONTROL" while a host reads data ('scan' / 'scan_bin' pause the sweep,
+// 'data'), "PAUSED" otherwise. Evaluated every sweep thread loop, the plot redraws only on change.
+//=====================================================================================================
+#define PAUSE_BANNER_HOST_TIME  MS2ST(3000)        // host activity shown for 3 s after the last read
+#define PAUSE_BANNER_CCM __attribute__((section(".ram4_clear")))   // CCM RAM, zeroed at startup
+static volatile systime_t host_read_time PAUSE_BANNER_CCM;  // last host 'scan' / 'data' (shell side)
+static volatile bool host_read_recent PAUSE_BANNER_CCM;
+static virtual_timer_t pause_banner_vt PAUSE_BANNER_CCM;    // wakes the paused (__WFI) loop at the timeout
+
+static inline void host_read_mark(void) {
+  host_read_time = chVTGetSystemTimeX();
+  host_read_recent = true;
+}
+
+static void pause_banner_wake(void *p) {(void)p;}  // the timer interrupt itself ends __WFI()
+
+static void pause_banner_poll(void) {
+  uint8_t state = PAUSE_BANNER_OFF;
+  if (host_read_recent) {
+    // Wrap safe signed delta (never compare raw systime values), < 0: written just after the read
+    int32_t dt = (int32_t)(chVTGetSystemTimeX() - host_read_time);
+    if (dt >= (int32_t)PAUSE_BANNER_HOST_TIME) host_read_recent = false;   // also while sweeping
+    else if (!(sweep_mode & (SWEEP_ENABLE|SWEEP_ONCE))) {
+      state = PAUSE_BANNER_HOST;
+      if (dt < 0) dt = 0;
+      chVTSet(&pause_banner_vt, PAUSE_BANNER_HOST_TIME - (systime_t)dt + 1, pause_banner_wake, NULL);
+    }
+  }
+  if (state == PAUSE_BANNER_OFF && !(sweep_mode & (SWEEP_ENABLE|SWEEP_ONCE)))
+    state = PAUSE_BANNER_PAUSED;
+  plot_set_pause_banner(state);
+}
+#endif
 // Run Shell commands queued for the sweep thread (also called from modal UI screens)
 void shell_poll_pending(void) {
   while (shell_function) {
@@ -285,6 +321,10 @@ static THD_FUNCTION(Thread1, arg)
       request_to_redraw(REDRAW_PLOT);
     }
     request_to_redraw(REDRAW_BATTERY);
+#ifdef __VNA_PAUSE_BANNER__
+    // Also while a host drives 'scan' (no completed sweep here, no REDRAW_PLOT)
+    pause_banner_poll();
+#endif
 #ifndef DEBUG_CONSOLE_SHOW
     // plot trace and other indications as raster
     draw_all();
@@ -308,6 +348,11 @@ void
 toggle_sweep(void)
 {
   sweep_mode ^= SWEEP_ENABLE;
+#ifdef __VNA_PAUSE_BANNER__
+  // Menu RESUME SWEEP (the banner hint) after a host 'scan', which leaves its own range in the
+  // frequency table: back to the configured sweep like the shell 'resume'
+  if (sweep_mode & SWEEP_ENABLE) update_frequencies();
+#endif
 }
 
 //
@@ -541,6 +586,9 @@ VNA_SHELL_FUNCTION(cmd_resume)
   // restore frequencies array and cal
   update_frequencies();
   resume_sweep();
+#ifdef __VNA_PAUSE_BANNER__
+  host_read_recent = false;                        // host done: a later pause shows PAUSED
+#endif
 }
 
 VNA_SHELL_FUNCTION(cmd_reset)
@@ -775,6 +823,9 @@ VNA_SHELL_FUNCTION(cmd_data)
     goto usage;
 
   array = sel < 2 ? measured[sel] : cal_data[sel-2];
+#ifdef __VNA_PAUSE_BANNER__
+  if (sel < 2) host_read_mark();
+#endif
 
   for (i = 0; i < sweep_points; i++)
     shell_printf("%f %f" VNA_SHELL_NEWLINE_STR, array[i][0], array[i][1]);
@@ -1448,6 +1499,9 @@ VNA_SHELL_FUNCTION(cmd_scan)
   if (sweep_ch & (SWEEP_CH0_MEASURE|SWEEP_CH1_MEASURE))
     sweep(false, sweep_ch);
   pause_sweep();
+#ifdef __VNA_PAUSE_BANNER__
+  host_read_mark();
+#endif
   // Output data after if set (faster data receive)
   if (mask) {
     if (mask&SCAN_MASK_BINARY){

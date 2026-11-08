@@ -326,7 +326,7 @@ typedef struct {
   int32_t x, y;
 } cellPrintStream;
 
-#if defined(_USE_SHADOW_TEXT_) || defined(__VNA_LORA_PROFILES__)
+#if defined(_USE_SHADOW_TEXT_) || defined(__VNA_LORA_PROFILES__) || defined(__VNA_PAUSE_BANNER__)
 static bool cell_text_shadow = true;  // false: plain text (dark text on coloured chips)
 #endif
 static int32_t put_normal(int x, int y, uint8_t ch) {
@@ -443,6 +443,82 @@ static void invalidate_rect_func(int x0, int y0, int x1, int y1) {
       markmap[y0]|= mask;
 }
 #define invalidate_rect(x0, y0, x1, y1) invalidate_rect_func((x0)/CELLWIDTH, (y0)/CELLHEIGHT, (x1)/CELLWIDTH, (y1)/CELLHEIGHT)
+
+#if defined(__VNA_LORA_PROFILES__) || defined(__VNA_PAUSE_BANNER__)
+// Filled rectangle in the cell (cell coordinates, clipped to the cell)
+static void cell_fill(int x, int y, int w, int h, pixel_t c) {
+  if (x < 0) {w+= x; x = 0;}
+  if (y < 0) {h+= y; y = 0;}
+  if (x + w > CELLWIDTH)  w = CELLWIDTH  - x;
+  if (y + h > CELLHEIGHT) h = CELLHEIGHT - y;
+  for (; h > 0; h--, y++)
+    for (int i = 0; i < w; i++) cell_buffer[y * CELLWIDTH + x + i] = c;
+}
+#endif
+
+#ifdef __VNA_PAUSE_BANNER__
+//**************************************************************************************
+// Sweep stopped banner: filled box with one FONT_NORMAL line over the plot, drawn in the
+// cells (draw_cell), invalidated when its state or place changes (banner_update).
+// Full screen LoRa modes (TUNE, S21 COMPARE): a strip at the top of the screen instead.
+//**************************************************************************************
+#define BANNER_H        (FONT_STR_HEIGHT + 8)     // 19 px
+#define BANNER_PAD      10                        // text left/right padding
+#define BANNER_HOST_BG  RGB565(  0, 72, 210)      // PC CONTROL: blue, white text
+#define BANNER_PAUSE_BG RGB565(255,150,  0)       // PAUSED: amber, black text
+static uint8_t banner_req;                        // PAUSE_BANNER_xx from the sweep thread
+static struct {int16_t x, y, w; uint8_t state;} banner;   // as drawn in the cells (area coordinates)
+#ifdef __VNA_LORA_PROFILES__
+static uint8_t banner_fs;                         // as drawn on the full screen modes
+#endif
+
+void plot_set_pause_banner(uint8_t state) {banner_req = state;}
+
+static const char *banner_text(uint8_t state) {
+  return state == PAUSE_BANNER_HOST ? "USB: PC CONTROL - sweep paused" : "PAUSED - menu: RESUME SWEEP";
+}
+
+static int banner_text_w(const char *s) {
+  int w = 0;
+  for (; *s; s++) w+= FONT_GET_WIDTH((uint8_t)*s);
+  return w;
+}
+
+static void banner_colors(uint8_t state, pixel_t *bg) {
+  bool host = state == PAUSE_BANNER_HOST;
+  *bg = host ? BANNER_HOST_BG : BANNER_PAUSE_BG;
+  foreground_color = host ? RGB565(255,255,255) : RGB565(0,0,0);
+}
+
+static void banner_invalidate(void) {
+  if (banner.state)
+    invalidate_rect(banner.x, banner.y, banner.x + banner.w - 1, banner.y + BANNER_H - 1);
+}
+
+#ifdef __VNA_LORA_PROFILES__
+// Full screen modes, before their static/plot draw: on a change return true (draw it after), when
+// it goes away ask for the static redraw (the strip covers the title line)
+static bool __attribute__((noinline)) banner_fullscreen_check(void) {
+  if (banner_req == banner_fs) return false;
+  if (!banner_req) request_to_redraw(REDRAW_CLRSCR);
+  banner_fs = banner_req;
+  return true;
+}
+
+// Full width strip at the top of the screen, bottom line in the foreground colour
+static void __attribute__((noinline)) banner_fullscreen_draw(void) {
+  if (!banner_fs) return;
+  pixel_t bg;
+  banner_colors(banner_fs, &bg);
+  background_color = GET_PALETTE_COLOR(LCD_FG_COLOR);
+  lcd_fill(0, BANNER_H, LCD_WIDTH, 1);
+  background_color = bg;
+  lcd_fill(0, 0, LCD_WIDTH, BANNER_H);
+  const char *t = banner_text(banner_fs);
+  lcd_drawstring((LCD_WIDTH - banner_text_w(t)) / 2, (BANNER_H - FONT_GET_HEIGHT) / 2, t);
+}
+#endif
+#endif
 
 //**************************************************************************************
 // NanoVNA measures
@@ -1162,6 +1238,61 @@ static void cell_draw_measure(int x0, int y0) {
 }
 #endif
 
+#ifdef __VNA_PAUSE_BANNER__
+// Banner place (area coordinates), centred on the plot:
+//  - stock screen: just under the marker / trace readout lines
+//  - LoRa profile screen: under the band marker labels, beside the info block if that is
+//    at a top corner (centred in the wider free part)
+static void banner_rect(int w, int16_t *bx, int16_t *by) {
+  int cx = CELLOFFSETX + WIDTH / 2, y;
+#ifdef __VNA_LORA_PROFILES__
+  if (lora_screen_on) {
+    y = LORA_LBL_Y + LORA_LBL_H + 2;
+    if (lp.box_h && lp.box_y < y + BANNER_H && lp.box_y + lp.box_h > y) {
+      int l = lp.box_x - (CELLOFFSETX + 1), r = CELLOFFSETX + WIDTH - (lp.box_x + LORA_BOX_W);
+      cx = l >= r ? CELLOFFSETX + 1 + l / 2 : lp.box_x + LORA_BOX_W + r / 2;
+    }
+  } else
+#endif
+  y = marker_area_max() + 3;
+  int x = cx - w / 2;
+  if (x > CELLOFFSETX + WIDTH - w) x = CELLOFFSETX + WIDTH - w;
+  if (x < CELLOFFSETX + 1)         x = CELLOFFSETX + 1;
+  if (y > HEIGHT - BANNER_H)       y = HEIGHT - BANNER_H;
+  *bx = x; *by = y;
+}
+
+// Apply the requested state: on any change of state or place, mark the old and the new
+// rectangle for redraw. Return true if cells need a redraw.
+static bool banner_update(void) {
+  uint8_t s = banner_req;
+  int16_t x = 0, y = 0, w = 0;
+  if (s) {
+    w = banner_text_w(banner_text(s)) + 2 * BANNER_PAD;
+    banner_rect(w, &x, &y);
+  }
+  if (s == banner.state && x == banner.x && y == banner.y && w == banner.w) return false;
+  banner_invalidate();                            // erase the old one
+  banner.state = s; banner.x = x; banner.y = y; banner.w = w;
+  banner_invalidate();                            // draw the new one
+  return true;
+}
+
+// Banner part inside the cell (x0, y0): frame in the foreground colour, filled box, text
+static void cell_draw_banner(int x0, int y0) {
+  if (!banner.state) return;
+  int x = banner.x - x0, y = banner.y - y0;
+  if (x >= CELLWIDTH || x + banner.w <= 0 || y >= CELLHEIGHT || y + BANNER_H <= 0) return;
+  pixel_t bg;
+  cell_fill(x, y, banner.w, BANNER_H, GET_PALETTE_COLOR(LCD_FG_COLOR));
+  banner_colors(banner.state, &bg);
+  cell_fill(x + 1, y + 1, banner.w - 2, BANNER_H - 2, bg);
+  cell_text_shadow = false;
+  cell_printf(x + BANNER_PAD, y + (BANNER_H - FONT_GET_HEIGHT) / 2, "%s", banner_text(banner.state));
+  cell_text_shadow = true;
+}
+#endif
+
 //**************************************************************************************
 //           Calculate and cache point coordinates for trace
 //**************************************************************************************
@@ -1591,6 +1722,11 @@ static void draw_cell(int x0, int y0) {
     cell_draw_marker_info(x0, y0);
 #endif
 
+#ifdef __VNA_PAUSE_BANNER__
+  // Sweep stopped banner (under the measure output: LoRa info block and toast stay on top)
+  cell_draw_banner(x0, y0);
+#endif
+
   // Measure data output
 #ifdef __VNA_MEASURE_MODULE__
   cell_draw_measure(x0, y0);
@@ -1624,6 +1760,9 @@ static void draw_all_cells(void) {
 #endif
 #ifdef __VNA_MEASURE_MODULE__
   measure_prepare();
+#endif
+#ifdef __VNA_PAUSE_BANNER__
+  banner_update();                                // LoRa info block may have moved
 #endif
   uint16_t m, n;
   uint16_t w = (area_width  + CELLWIDTH  - 1) / CELLWIDTH;
@@ -1836,6 +1975,9 @@ void draw_all(void) {
     if (redraw_request & REDRAW_GRID_VALUE) markmap_grid_values();
 #endif
   }
+#ifdef __VNA_PAUSE_BANNER__
+  if (banner_update()) redraw_request|= REDRAW_CELLS;
+#endif
   if (redraw_request & (REDRAW_CELLS | REDRAW_MARKER | REDRAW_GRID_VALUE | REDRAW_REFERENCE | REDRAW_AREA))
     draw_all_cells();
   if (redraw_request & REDRAW_FREQUENCY)

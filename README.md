@@ -98,6 +98,11 @@ or a tap on an empty part of the plot).
   re-enumerating as 0483:df11 (on stock it froze on the DFU screen).
 - **Crash log**: a HardFault stores PC/LR/fault registers and reboots instead of hanging; the
   splash shows a red line and the `fault` shell command prints the record.
+- **Paused / PC control banner**: when the device's own sweep is stopped the plot shows a banner
+  instead of a silently frozen screen: blue `USB: PC CONTROL - sweep paused` while a host reads
+  data (`scan` / `scan_bin` / `data`, shown for 3 s after the last read), amber
+  `PAUSED - menu: RESUME SWEEP` otherwise (menu PAUSE SWEEP, shell `pause`, a host gone without
+  `resume`). A strip at the top in the TUNE / S21 COMPARE screens. `resume` removes it.
 
 ### More screenshots
 

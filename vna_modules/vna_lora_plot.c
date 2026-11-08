@@ -191,14 +191,7 @@ static void lora_draw_bar_tab(void) {
 }
 
 // Cell helpers
-static void lora_cell_fill(int x, int y, int w, int h, pixel_t c) {
-  if (x < 0) {w+= x; x = 0;}
-  if (y < 0) {h+= y; y = 0;}
-  if (x + w > CELLWIDTH)  w = CELLWIDTH  - x;
-  if (y + h > CELLHEIGHT) h = CELLHEIGHT - y;
-  for (; h > 0; h--, y++)
-    for (int i = 0; i < w; i++) cell_buffer[y * CELLWIDTH + x + i] = c;
-}
+#define lora_cell_fill cell_fill                  // plot.c
 
 // Text width in pixels (same advance as put_normal), same on every cell
 static int lora_str_width(const char *s) {
@@ -1125,20 +1118,27 @@ bool lora_fullscreen_draw(void) {
     lora_toast_invalidate();
     request_to_redraw(REDRAW_CELLS);
   }
+  if (lora_cmp.state == LORA_CMP_OFF && !lora_tune_s.on) return false;
+#ifdef __VNA_PAUSE_BANNER__
+  bool banner_draw = banner_fullscreen_check();   // sweep stopped banner changed
+#endif
   if (lora_cmp.state != LORA_CMP_OFF) {
     if (redraw_request & REDRAW_CLRSCR) lora_cmp_static();
     if (redraw_request & REDRAW_PLOT) {
       if (lora_cmp.skip) lora_cmp.skip--;
       else lora_cmp_draw();
     }
-    return true;
+  } else {
+    if (redraw_request & REDRAW_CLRSCR) lora_tune_static();
+    if (redraw_request & REDRAW_PLOT) {
+      if (lora_tune_s.skip) lora_tune_s.skip--;
+      else lora_tune_draw();
+    }
   }
-  if (!lora_tune_s.on) return false;
-  if (redraw_request & REDRAW_CLRSCR) lora_tune_static();
-  if (redraw_request & REDRAW_PLOT) {
-    if (lora_tune_s.skip) lora_tune_s.skip--;
-    else lora_tune_draw();
-  }
+#ifdef __VNA_PAUSE_BANNER__
+  // Over the title line, again after a static redraw (lora_cmp_draw() may do one)
+  if (banner_draw || (redraw_request & (REDRAW_CLRSCR | REDRAW_PLOT))) banner_fullscreen_draw();
+#endif
   return true;
 }
 
