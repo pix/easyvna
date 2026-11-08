@@ -35,6 +35,14 @@ by PiX (and the Claude, OpenAI and Deepseek AI band).
 
 **NanoVNA-H4 only.** Do not flash it on a NanoVNA-H (F072), a NanoVNA V2 or a LiteVNA.
 
+**Easiest: in the browser.** Open [EasyVNA Web](https://pix.github.io/easyvna-web/) in Chrome or
+Edge on a computer, press **FIRMWARE** and follow the steps. It carries the latest EasyVNA release,
+backs up the whole flash first, erases only the firmware pages (calibrations and settings are
+kept) and checks what it wrote. Linux needs a udev rule and Windows the WinUSB driver for DFU mode;
+the dialog explains both.
+
+**With dfu-util:**
+
 1. **Download** `EasyVNA-H4-<version>.bin` (or `.hex`) from the
    [latest release](https://github.com/pix/easyvna/releases/latest).
 2. **Enter DFU mode.**
@@ -47,7 +55,7 @@ by PiX (and the Claude, OpenAI and Deepseek AI band).
 
 4. **Flash:**
 
-       dfu-util -d 0483:df11 -a 0 -s 0x08000000:leave -D EasyVNA-H4-v0.1.0.bin
+       dfu-util -d 0483:df11 -a 0 -s 0x08000000:leave -D EasyVNA-H4-v0.1.1.bin
 
    On Windows, [STM32CubeProgrammer](https://www.st.com/en/development-tools/stm32cubeprog.html)
    over USB with the `.hex` file also works. Do **not** tick "full chip erase": it wipes your
@@ -57,8 +65,9 @@ Your configuration and calibration slots are kept. At the first boot, pick a pro
 **NO CAL** need a quick CAL (OPEN / SHORT / LOAD). To go back, flash your backup or any
 [NanoVNA-D release](https://github.com/DiSlord/NanoVNA-D/releases).
 
-The companion browser app is [EasyVNA Web](https://github.com/pix/easyvna-web/releases/latest)
-(Windows, macOS).
+The companion app is [EasyVNA Web](https://pix.github.io/easyvna-web/): in the browser (Chrome or
+Edge, no install), or as a program for Windows and macOS
+([releases](https://github.com/pix/easyvna-web/releases/latest)).
 
 ## Features
 
