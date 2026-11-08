@@ -41,6 +41,7 @@
 #define BUTTON_DOUBLE_TICKS         MS2ST(250)   // 250ms
 #define BUTTON_REPEAT_TICKS         MS2ST( 30)   //  30ms
 #define BUTTON_DEBOUNCE_TICKS       MS2ST( 20)   //  20ms
+#define TOUCH_DEBOUNCE_TICKS        MS2ST(100)   // 100ms, ignore a new touch press this soon after a release (accidental double taps)
 
 /* lever switch assignment */
 #define BUTTON_DOWN                 (1<<GPIOA_LEVER1)
@@ -479,6 +480,14 @@ static int touch_check(void) {
   }
 
   if (stat != last_touch_status) {
+    // Filter accidental double taps (bounce of the resistive panel): ignore a press arriving too soon
+    // after a release; a press held longer than the filter time still fires (as EVT_TOUCH_PRESSED).
+    // Unsigned systime difference: wrap safe.
+    systime_t ticks = chVTGetSystemTimeX();
+    static systime_t last_touch_release_ticks;
+    if (stat && (systime_t)(ticks - last_touch_release_ticks) < TOUCH_DEBOUNCE_TICKS)
+      return EVT_TOUCH_NONE;
+    if (!stat) last_touch_release_ticks = ticks;
     last_touch_status = stat;
     return stat ? EVT_TOUCH_PRESSED : EVT_TOUCH_RELEASED;
   }
